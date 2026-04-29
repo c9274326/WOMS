@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   defaultLine,
+  conflictExplanation,
   escapeHtml,
   exactFilterOrders,
   groupAllocationsByDate,
@@ -12,6 +13,7 @@ import {
   statusClass,
   statusCounts,
   uniqueValues,
+  waterlineMetrics,
 } from "./ui.js";
 
 const order = {
@@ -116,6 +118,28 @@ test("groupAllocationsByDate groups calendar allocations by ISO date", () => {
   ]);
   assert.deepEqual(groups["2026-05-02"].map((item) => item.orderId), ["ORD-1", "ORD-2"]);
   assert.deepEqual(groups["2026-05-03"].map((item) => item.orderId), ["ORD-3"]);
+});
+
+test("waterlineMetrics summarizes daily capacity usage", () => {
+  const metrics = waterlineMetrics([
+    { quantity: 1800 },
+    { quantity: 700 },
+  ]);
+  assert.equal(metrics.total, 2500);
+  assert.equal(metrics.capacity, 10000);
+  assert.equal(metrics.percent, 25);
+  assert.match(metrics.color, /^hsl\(\d+ 88% 48%\)$/);
+
+  const full = waterlineMetrics([{ quantity: 12000 }]);
+  assert.equal(full.total, 12000);
+  assert.equal(full.percent, 100);
+  assert.equal(full.color, "hsl(0 88% 48%)");
+});
+
+test("conflictExplanation gives actionable guidance", () => {
+  assert.match(conflictExplanation({ reason: "capacity cannot satisfy order before due date" }), /提前開始/);
+  assert.match(conflictExplanation({ reason: "existing allocations require manual review or reschedule" }), /人工強制介入/);
+  assert.match(conflictExplanation({ reason: "unknown" }), /檢查產能/);
 });
 
 test("priorityLabel returns zh-TW display labels", () => {
