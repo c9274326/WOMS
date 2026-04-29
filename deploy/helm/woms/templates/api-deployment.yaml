@@ -32,6 +32,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "woms.fullname" . }}-api
                   key: JWT_SECRET
+            - name: DEMO_SEED_DATA
+              value: {{ .Values.api.env.demoSeedData | quote }}
             - name: DATABASE_URL
               value: {{ .Values.api.env.databaseUrl | quote }}
             - name: REDIS_ADDR

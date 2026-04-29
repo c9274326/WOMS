@@ -4,12 +4,14 @@
 
 ```bash
 go test ./...
+npm run test:web
 test -z "$(gofmt -l .)"
 ```
 
 期望結果：
 
 - 所有 Go tests 通過。
+- 前端 mock tests 通過。
 - `gofmt` 沒有輸出。
 
 ## 2. API/JWT/RBAC 驗證

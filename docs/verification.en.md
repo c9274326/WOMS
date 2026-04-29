@@ -4,12 +4,14 @@
 
 ```bash
 go test ./...
+npm run test:web
 test -z "$(gofmt -l .)"
 ```
 
 Expected:
 
 - All Go tests pass.
+- Frontend mock tests pass.
 - `gofmt` produces no output.
 
 ## 2. API/JWT/RBAC Verification
