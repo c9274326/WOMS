@@ -20,6 +20,20 @@ func TestIngressAuthRejectsMissingToken(t *testing.T) {
 	}
 }
 
+func TestIngressAuthAcceptsValidToken(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	req := httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestSalesCannotCreateScheduleJob(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	token := login(t, server, "sales", "demo")
@@ -32,6 +46,50 @@ func TestSalesCannotCreateScheduleJob(t *testing.T) {
 
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestOrderValidationRejectsInvalidQuantity(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":10,"priority":"low","dueDate":"2026-05-03"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSchedulerSeesOnlyAssignedLineOrders(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	createOrder(t, server, salesToken, "B")
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Orders []struct {
+			LineID string `json:"lineId"`
+		} `json:"orders"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode orders response: %v", err)
+	}
+	if len(payload.Orders) != 1 || payload.Orders[0].LineID != "A" {
+		t.Fatalf("expected only line A order, got %+v", payload.Orders)
 	}
 }
 

@@ -82,6 +82,7 @@ cp .env.example .env
 重要設定：
 
 - `JWT_SECRET`: JWT 簽章密鑰，正式環境必須替換。
+- `DEMO_SEED_DATA`: 預設 `true`，若要關閉 demo 訂單可設為 `false`。
 - `DATABASE_URL`: PostgreSQL 連線字串。
 - `REDIS_ADDR`: Redis 位址。
 - `KAFKA_BROKERS`: Kafka broker 清單。
@@ -123,6 +124,12 @@ docker compose up --build
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 - Kafka: `localhost:9092`
+
+資料持久化說明：
+
+- Docker Compose 的 PostgreSQL 使用 `postgres-data` named volume，因此本機 DB 資料會在 container 重啟後保留。
+- 目前 foundation API 仍使用 in-memory store。PostgreSQL migration 與 seed files 已存在，但 API 寫入 PostgreSQL 的 persistence wiring 會在後續 feature slice 完成。
+- Helm chart 目前使用 `DATABASE_URL` 連接資料庫，尚未內建 PostgreSQL StatefulSet/PVC。
 
 ## Docker Build
 
@@ -168,6 +175,7 @@ helm upgrade --install woms ./deploy/helm/woms \
 GitHub Actions 會執行：
 
 - `go test ./...`
+- `npm run test:web`
 - `gofmt` 檢查
 - API、worker、web Docker build
 - Helm render

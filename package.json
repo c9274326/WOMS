@@ -1,0 +1,11 @@
+{
+  "name": "woms",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:web": "node --test web/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

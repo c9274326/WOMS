@@ -82,6 +82,7 @@ cp .env.example .env
 Important settings:
 
 - `JWT_SECRET`: JWT signing secret. Replace it in production.
+- `DEMO_SEED_DATA`: defaults to `true`; set to `false` to start the API without demo orders.
 - `DATABASE_URL`: PostgreSQL connection string.
 - `REDIS_ADDR`: Redis address.
 - `KAFKA_BROKERS`: Kafka broker list.
@@ -123,6 +124,12 @@ Default services:
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 - Kafka: `localhost:9092`
+
+Persistence note:
+
+- Docker Compose PostgreSQL uses the `postgres-data` named volume, so local database data survives container restarts.
+- The current foundation API still uses an in-memory store. PostgreSQL migrations and seed files are present, but API persistence wiring is a later feature slice.
+- The Helm chart currently consumes `DATABASE_URL`; it does not yet deploy a PostgreSQL StatefulSet/PVC.
 
 ## Docker Build
 
@@ -168,6 +175,7 @@ helm upgrade --install woms ./deploy/helm/woms \
 GitHub Actions runs:
 
 - `go test ./...`
+- `npm run test:web`
 - `gofmt` check
 - API, worker, and web Docker builds
 - Helm rendering

@@ -8,6 +8,7 @@ api:
     tag: latest
   jwtSecret: change-me-in-production
   env:
+    demoSeedData: "true"
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
     redisAddr: redis:6379
     kafkaBrokers: kafka:9092

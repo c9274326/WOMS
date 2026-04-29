@@ -12,10 +12,14 @@ import (
 func main() {
 	addr := env("HTTP_ADDR", ":8080")
 	jwtSecret := env("JWT_SECRET", "change-me-in-production")
+	store := api.NewMemoryStore()
+	if env("DEMO_SEED_DATA", "true") != "false" {
+		store = api.NewDemoMemoryStore()
+	}
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           api.NewServer(jwtSecret, api.NewMemoryStore()),
+		Handler:           api.NewServer(jwtSecret, store),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

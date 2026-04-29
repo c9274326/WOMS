@@ -33,9 +33,25 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+  web-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run web mock tests
+        run: npm run test:web
+
   docker-build:
     runs-on: ubuntu-latest
-    needs: test
+    needs:
+      - test
+      - web-test
     strategy:
       matrix:
         include:
@@ -62,7 +78,9 @@ jobs:
 
   helm-render:
     runs-on: ubuntu-latest
-    needs: test
+    needs:
+      - test
+      - web-test
     steps:
       - name: Checkout
         uses: actions/checkout@v4

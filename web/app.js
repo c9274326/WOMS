@@ -1,3 +1,5 @@
+import { escapeHtml, matchesOrder, priorityLabel, statusClass } from "./ui.js";
+
 const state = {
   token: "",
   orders: [],
@@ -76,7 +78,7 @@ function renderOrders() {
       <td>${escapeHtml(order.customer)}</td>
       <td>${escapeHtml(order.lineId)}</td>
       <td class="numeric">${order.quantity.toLocaleString()}</td>
-      <td><span class="tag ${order.priority === "high" ? "high" : ""}">${order.priority === "high" ? "高" : "低"}</span></td>
+      <td><span class="tag ${order.priority === "high" ? "high" : ""}">${priorityLabel(order.priority)}</span></td>
       <td><span class="tag ${statusClass(order.status)}">${escapeHtml(order.status)}</span></td>
       <td>${new Date(order.dueDate).toISOString().slice(0, 10)}</td>
     `;
@@ -93,23 +95,6 @@ function renderOrders() {
     });
   });
   updateSelectedCount();
-}
-
-function matchesOrder(order, query) {
-  if (!query) {
-    return true;
-  }
-  return [order.id, order.customer, order.lineId, order.status, order.priority]
-    .some((value) => String(value).toLowerCase().includes(query));
-}
-
-function statusClass(status) {
-  return {
-    "待排程": "status-pending",
-    "已排程": "status-scheduled",
-    "生產中": "status-running",
-    "已完成": "status-completed",
-  }[status] ?? "";
 }
 
 function updateSelectedCount() {
@@ -138,13 +123,4 @@ async function request(path, options = {}, needsAuth = true) {
 
 function renderOutput(id, value) {
   document.getElementById(id).textContent = JSON.stringify(value, null, 2);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }

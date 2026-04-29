@@ -38,6 +38,7 @@ services:
     environment:
       HTTP_ADDR: ":8080"
       JWT_SECRET: local-dev-secret
+      DEMO_SEED_DATA: "true"
       DATABASE_URL: postgres://woms:woms@postgres:5432/woms?sslmode=disable
       REDIS_ADDR: redis:6379
       KAFKA_BROKERS: kafka:9092
