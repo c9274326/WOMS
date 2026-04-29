@@ -10,7 +10,7 @@ export function exactFilterOrders(orders, filters) {
   return orders.filter((order) => {
     return matchesSet(order.customer, filters.customers)
       && matchesSet(order.lineId, filters.lines)
-      && matchesSet(order.status, filters.statuses)
+      && matchesStatus(order.status, filters.status)
       && matchesSet(order.priority, filters.priorities);
   });
 }
@@ -90,4 +90,8 @@ export function escapeHtml(value) {
 
 function matchesSet(value, selected) {
   return selected.size === 0 || selected.has(String(value));
+}
+
+function matchesStatus(value, selected) {
+  return !selected || String(value) === selected;
 }

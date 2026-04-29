@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('sales', 'scheduler')),
+    role TEXT NOT NULL CHECK (role IN ('admin', 'sales', 'scheduler')),
     line_id TEXT
 );
 

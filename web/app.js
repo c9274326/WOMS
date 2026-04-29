@@ -17,13 +17,15 @@ const priorities = ["low", "high"];
 const state = {
   token: localStorage.getItem("woms.token") ?? "",
   user: JSON.parse(localStorage.getItem("woms.user") ?? "null"),
+  users: [],
   orders: [],
   calendarAllocations: [],
+  preview: null,
   selectedOrderIds: new Set(),
   filters: {
     customers: new Set(),
     lines: new Set(),
-    statuses: new Set(),
+    status: "",
     priorities: new Set(),
   },
   calendarDate: new Date(),
@@ -37,56 +39,173 @@ document.querySelectorAll('input[type="date"]').forEach((input) => {
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.currentTarget));
-  const payload = await request("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify(data),
-  }, false);
-  saveSession(payload.token, payload.user);
-  renderOutput("schedule-output", { loggedIn: payload.user });
-  await refreshWorkspace();
+  try {
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const payload = await request("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }, false);
+    saveSession(payload.token, payload.user);
+    showMessage("登入成功", `您好 ${payload.user.username}`);
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("登入失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("logout-button").addEventListener("click", () => {
+  clearSession();
+  renderAuthState();
+  renderWorkspace();
+  showMessage("已登出", "你已回到未登入狀態");
 });
 
 document.getElementById("order-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.currentTarget));
-  data.quantity = Number(data.quantity);
-  await request("/api/orders", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-  await refreshWorkspace();
+  try {
+    const draftOrder = orderFormData();
+    const result = await createPreview({
+      lineId: draftOrder.lineId,
+      startDate: document.querySelector('#schedule-form input[name="startDate"]').value,
+      draftOrder,
+    }, "sales-draft");
+    openPreviewPage(result);
+  } catch (error) {
+    showMessage("無法預覽新訂單", error.message, "warn");
+  }
+});
+
+document.getElementById("assign-user-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const user = await request("/api/users", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    showMessage("帳號已更新", `${user.username} 現在是 ${user.role}${user.lineId ? ` / Line ${user.lineId}` : ""}`);
+    await loadUsers();
+  } catch (error) {
+    showMessage("帳號更新失敗", error.message, "warn");
+  }
 });
 
 document.getElementById("refresh-orders").addEventListener("click", refreshWorkspace);
+
 document.getElementById("preview-selected").addEventListener("click", async () => {
-  const data = scheduleFormData();
-  data.orderIds = Array.from(state.selectedOrderIds);
-  const result = await request("/api/schedules/preview", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-  renderPreview(result);
-  renderOutput("schedule-output", result);
+  if (state.selectedOrderIds.size === 0) {
+    showMessage("請先選取訂單", "至少選取一張待排程訂單再進行試排。", "warn");
+    return;
+  }
+  try {
+    const data = scheduleFormData();
+    data.orderIds = Array.from(state.selectedOrderIds);
+    const result = await createPreview(data, "schedule");
+    openPreviewPage(result);
+  } catch (error) {
+    showMessage("試排失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("delete-selected").addEventListener("click", async () => {
+  if (state.selectedOrderIds.size === 0) {
+    showMessage("請先選取訂單", "沒有可以刪除的訂單。", "warn");
+    return;
+  }
+  const ok = window.confirm(`確定刪除 ${state.selectedOrderIds.size} 張已選取訂單嗎？`);
+  if (!ok) {
+    return;
+  }
+  try {
+    const payload = await request("/api/orders", {
+      method: "DELETE",
+      body: JSON.stringify({ orderIds: Array.from(state.selectedOrderIds) }),
+    });
+    state.selectedOrderIds.clear();
+    showMessage("刪除完成", `已刪除 ${payload.deletedOrderIds?.length ?? 0} 張訂單。`);
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("刪除失敗", error.message, "warn");
+  }
 });
 
 document.getElementById("schedule-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const action = event.submitter.value;
-  const data = scheduleFormData();
-  const path = action === "job" ? "/api/schedules/jobs" : "/api/schedules/preview";
-  const result = await request(path, {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-  if (action === "preview") {
-    renderPreview(result);
+  if (state.user?.role === "scheduler" && state.selectedOrderIds.size === 0) {
+    showMessage("請先選取訂單", "排程工程師必須先選取待排程訂單，才能進入試排確認流程。", "warn");
+    return;
   }
-  renderOutput("schedule-output", result);
-  if (action === "job") {
-    await refreshWorkspace();
+  try {
+    const data = scheduleFormData();
+    data.orderIds = Array.from(state.selectedOrderIds);
+    const result = await createPreview(data, "schedule");
+    openPreviewPage(result);
+  } catch (error) {
+    showMessage("試排失敗", error.message, "warn");
   }
 });
+
+document.getElementById("create-conflict-demo").addEventListener("click", async () => {
+  try {
+    const form = scheduleFormData();
+    const payload = await request("/api/demo/conflict-orders", {
+      method: "POST",
+      body: JSON.stringify({
+        lineId: form.lineId,
+        dueDate: form.startDate,
+        count: 6,
+      }),
+    });
+    showMessage("衝突測試訂單已建立", `已建立 ${payload.orders?.length ?? 0} 張同日大量訂單，現在可以選取它們並試排。`);
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("無法建立衝突資料", error.message, "warn");
+  }
+});
+
+document.getElementById("confirm-preview-order").addEventListener("click", async () => {
+  if (!state.preview?.previewId) {
+    return;
+  }
+  try {
+    await request("/api/orders/preview-confirm", {
+      method: "POST",
+      body: JSON.stringify({ previewId: state.preview.previewId }),
+    });
+    closePreviewPage();
+    showMessage("已加入待排程", "新訂單已正式放入待排程訂單。");
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("無法加入待排程", error.message, "warn");
+  }
+});
+
+document.getElementById("confirm-schedule-job").addEventListener("click", async () => {
+  if (!state.preview?.previewId) {
+    return;
+  }
+  if ((state.preview.conflicts ?? []).length > 0) {
+    showMessage("仍有衝突", "請先檢查衝突清單；若要強制介入，請填寫原因並重新試排。", "warn");
+    return;
+  }
+  try {
+    const payload = await request("/api/schedules/jobs", {
+      method: "POST",
+      body: JSON.stringify({ ...state.preview.request, previewId: state.preview.previewId }),
+    });
+    if (payload.status === "failed") {
+      showMessage("排程未完成", payload.message ?? "排程任務失敗。", "warn");
+      return;
+    }
+    closePreviewPage();
+    showMessage("排程完成", `任務 ${payload.id} 已完成，日曆已更新。`);
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("排程失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("close-preview-page").addEventListener("click", closePreviewPage);
 
 document.getElementById("prev-month").addEventListener("click", async () => {
   state.calendarDate.setMonth(state.calendarDate.getMonth() - 1);
@@ -105,32 +224,52 @@ document.getElementById("today-month").addEventListener("click", async () => {
 
 document.querySelector('#schedule-form select[name="lineId"]').addEventListener("change", loadCalendar);
 
-if (state.user) {
-  document.querySelector('#login-form input[name="username"]').value = state.user.username;
-}
-
+renderAuthState();
 if (state.token) {
   refreshWorkspace().catch((error) => {
     clearSession();
-    renderOutput("schedule-output", { error: error.message });
+    renderAuthState();
+    showMessage("Session 已失效", error.message, "warn");
   });
+} else {
+  renderWorkspace();
 }
 
 async function refreshWorkspace() {
   await loadOrders();
   await loadCalendar();
+  if (state.user?.role === "admin") {
+    await loadUsers();
+  }
+  renderAuthState();
+}
+
+function renderWorkspace() {
+  renderFilters();
+  renderStatusSidebar();
+  renderOrders();
+  renderCalendar();
+  renderPreviewSummary();
 }
 
 async function loadOrders() {
   const payload = await request("/api/orders");
   state.orders = payload.orders ?? [];
+  state.selectedOrderIds = new Set(Array.from(state.selectedOrderIds).filter((id) => state.orders.some((order) => order.id === id)));
   renderFilters();
   renderStatusSidebar();
   renderOrders();
 }
 
+async function loadUsers() {
+  const payload = await request("/api/users");
+  state.users = payload.users ?? [];
+  renderUsers();
+}
+
 async function loadCalendar() {
   if (!state.token) {
+    state.calendarAllocations = [];
     renderCalendar();
     return;
   }
@@ -139,6 +278,44 @@ async function loadCalendar() {
   const payload = await request(`/api/schedules/calendar?lineId=${encodeURIComponent(lineId)}&month=${encodeURIComponent(month)}`);
   state.calendarAllocations = payload.allocations ?? [];
   renderCalendar();
+}
+
+async function createPreview(requestData, kind) {
+  const result = await request("/api/schedules/preview", {
+    method: "POST",
+    body: JSON.stringify(requestData),
+  });
+  state.preview = {
+    ...result,
+    kind,
+    request: {
+      lineId: requestData.lineId,
+      startDate: requestData.startDate,
+      orderIds: requestData.orderIds ?? [],
+      manualForce: requestData.manualForce === "on" || requestData.manualForce === true,
+      reason: requestData.reason ?? "",
+    },
+  };
+  renderPreviewSummary();
+  renderCalendar();
+  return state.preview;
+}
+
+function renderAuthState() {
+  const loggedIn = Boolean(state.token && state.user);
+  document.getElementById("login-form").hidden = loggedIn;
+  document.getElementById("session-bar").hidden = !loggedIn;
+  document.getElementById("admin-panel").hidden = state.user?.role !== "admin";
+  if (loggedIn) {
+    document.getElementById("session-greeting").textContent = `您好 ${state.user.username}`;
+  }
+}
+
+function renderUsers() {
+  const select = document.getElementById("assign-username");
+  select.innerHTML = state.users.map((user) => `
+    <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${escapeHtml(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""})</option>
+  `).join("");
 }
 
 function renderOrders() {
@@ -175,7 +352,7 @@ function renderOrders() {
 function renderFilters() {
   renderCheckboxGroup("customer-filters", uniqueValues(state.orders, "customer"), state.filters.customers, valueLabel);
   renderCheckboxGroup("line-filters", lines, state.filters.lines, valueLabel);
-  renderCheckboxGroup("status-filters", statuses, state.filters.statuses, valueLabel);
+  renderStatusRadios();
   renderCheckboxGroup("priority-filters", priorities, state.filters.priorities, priorityLabel);
 }
 
@@ -196,6 +373,26 @@ function renderCheckboxGroup(containerId, values, selected, labelFor) {
       } else {
         selected.delete(value);
       }
+      renderOrders();
+    });
+    container.appendChild(label);
+  }
+}
+
+function renderStatusRadios() {
+  const container = document.getElementById("status-filters");
+  container.innerHTML = "";
+  const values = ["", ...statuses];
+  for (const value of values) {
+    const id = `status-filter-${value || "all"}`;
+    const label = document.createElement("label");
+    label.className = "check-option";
+    label.innerHTML = `
+      <input type="radio" name="status-filter" id="${escapeHtml(id)}" value="${escapeHtml(value)}" ${state.filters.status === value ? "checked" : ""}>
+      <span>${escapeHtml(value || "全部")}</span>
+    `;
+    label.querySelector("input").addEventListener("change", () => {
+      state.filters.status = value;
       renderStatusSidebar();
       renderOrders();
     });
@@ -210,17 +407,13 @@ function renderStatusSidebar() {
   for (const status of statuses) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `status-filter-button ${state.filters.statuses.has(status) ? "active" : ""}`;
+    button.className = `status-filter-button ${state.filters.status === status ? "active" : ""}`;
     button.innerHTML = `
       <span>${escapeHtml(status)}</span>
       <span class="status-count">${counts[status]}</span>
     `;
     button.addEventListener("click", () => {
-      if (state.filters.statuses.has(status)) {
-        state.filters.statuses.delete(status);
-      } else {
-        state.filters.statuses.add(status);
-      }
+      state.filters.status = state.filters.status === status ? "" : status;
       renderFilters();
       renderStatusSidebar();
       renderOrders();
@@ -234,13 +427,14 @@ function renderCalendar() {
   const monthIndex = state.calendarDate.getMonth();
   document.getElementById("calendar-title").textContent = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
 
-  const groups = groupAllocationsByDate(state.calendarAllocations);
+  const previewAllocations = state.preview?.allocations ?? [];
+  const groups = groupAllocationsByDate([...state.calendarAllocations, ...previewAllocations.map((allocation) => ({ ...allocation, preview: true }))]);
   const grid = document.getElementById("calendar-grid");
   grid.innerHTML = "";
   for (const day of monthGrid(year, monthIndex)) {
     const allocations = groups[day.key] ?? [];
     const cell = document.createElement("div");
-    cell.className = `calendar-day ${day.inMonth ? "" : "outside"}`;
+    cell.className = `calendar-day ${day.inMonth ? "" : "outside"} ${allocations.some((item) => item.preview) ? "preview-highlight" : ""}`;
     cell.innerHTML = `
       <div class="calendar-day-number">
         <span>${day.date.getUTCDate()}</span>
@@ -252,37 +446,95 @@ function renderCalendar() {
   }
 }
 
-function renderPreview(result) {
+function renderPreviewSummary() {
   const preview = document.getElementById("preview-list");
-  const allocations = result.allocations ?? result.Allocations ?? [];
-  const conflicts = result.conflicts ?? result.Conflicts ?? [];
+  if (!state.preview) {
+    preview.textContent = "尚未試排";
+    return;
+  }
+  const allocations = state.preview.allocations ?? [];
+  const conflicts = state.preview.conflicts ?? [];
   if (allocations.length === 0 && conflicts.length === 0) {
     preview.textContent = "沒有可顯示的試排結果";
     return;
   }
   preview.innerHTML = [
-    ...allocations.map((allocation) => `
-      <div class="preview-item ${priorityClass(allocation.priority ?? allocation.Priority)}">
-        <strong>${escapeHtml(allocation.orderId ?? allocation.OrderID)}</strong>
-        <span>${dateOnly(allocation.date ?? allocation.Date)} · ${escapeHtml(allocation.lineId ?? allocation.LineID)} · ${(allocation.quantity ?? allocation.Quantity).toLocaleString()} 片</span>
-        <span>${priorityLabel(allocation.priority ?? allocation.Priority)}</span>
-      </div>
-    `),
-    ...conflicts.map((conflict) => `
-      <div class="preview-item high">
-        <strong>${escapeHtml(conflict.orderId ?? conflict.OrderID)}</strong>
-        <span>${escapeHtml(conflict.reason ?? conflict.Reason)}</span>
-      </div>
-    `),
+    `<div class="preview-item"><strong>${escapeHtml(state.preview.previewId)}</strong><span>點開試排頁查看日曆高亮與確認動作</span></div>`,
+    ...conflicts.map(renderConflictItem),
   ].join("");
+}
+
+function openPreviewPage(preview) {
+  state.preview = preview;
+  const page = document.getElementById("preview-page");
+  document.querySelector("main.layout").hidden = true;
+  page.hidden = false;
+  renderPreviewPage();
+  renderPreviewSummary();
+  renderCalendar();
+}
+
+function closePreviewPage() {
+  document.getElementById("preview-page").hidden = true;
+  document.querySelector("main.layout").hidden = false;
+}
+
+function renderPreviewPage() {
+  const pageList = document.getElementById("preview-page-list");
+  const allocations = state.preview?.allocations ?? [];
+  const conflicts = state.preview?.conflicts ?? [];
+  pageList.innerHTML = [
+    ...conflicts.map(renderConflictItem),
+    ...allocations.map((allocation) => `
+      <div class="preview-item ${priorityClass(allocation.priority)}">
+        <strong>${escapeHtml(allocation.orderId)}</strong>
+        <span>${dateOnly(allocation.date)} · ${escapeHtml(allocation.lineId)} · ${allocation.quantity.toLocaleString()} 片</span>
+        <span>${priorityLabel(allocation.priority)}</span>
+      </div>
+    `),
+  ].join("") || "沒有可顯示的試排結果";
+
+  document.getElementById("confirm-preview-order").hidden = state.preview?.kind !== "sales-draft";
+  document.getElementById("confirm-schedule-job").hidden = state.preview?.kind !== "schedule" || state.user?.role !== "scheduler";
+
+  const previewMonth = firstPreviewDate(allocations) ?? state.calendarDate;
+  const year = previewMonth.getUTCFullYear();
+  const monthIndex = previewMonth.getUTCMonth();
+  const groups = groupAllocationsByDate(allocations.map((allocation) => ({ ...allocation, preview: true })));
+  const grid = document.getElementById("preview-calendar-grid");
+  grid.innerHTML = "";
+  for (const day of monthGrid(year, monthIndex)) {
+    const dayAllocations = groups[day.key] ?? [];
+    const cell = document.createElement("div");
+    cell.className = `calendar-day ${day.inMonth ? "" : "outside"} ${dayAllocations.length ? "preview-highlight" : ""}`;
+    cell.innerHTML = `
+      <div class="calendar-day-number">
+        <span>${day.date.getUTCDate()}</span>
+        <span>${dayAllocations.length ? dayAllocations.length : ""}</span>
+      </div>
+      ${dayAllocations.map(renderCalendarItem).join("")}
+    `;
+    grid.appendChild(cell);
+  }
+}
+
+function renderConflictItem(conflict) {
+  const affected = conflict.affectedOrderIds?.length ? `影響：${conflict.affectedOrderIds.join(", ")}` : "無已知受影響訂單";
+  return `
+    <div class="preview-item high">
+      <strong>${escapeHtml(conflict.orderId)}</strong>
+      <span>${escapeHtml(conflict.reason)}</span>
+      <span>最早完成：${dateOnly(conflict.earliestFinishDate)} · ${escapeHtml(affected)}</span>
+    </div>
+  `;
 }
 
 function renderCalendarItem(allocation) {
   return `
-    <div class="calendar-item ${priorityClass(allocation.priority)}">
+    <div class="calendar-item ${priorityClass(allocation.priority)} ${allocation.preview ? "preview-item-inline" : ""}">
       <strong>${escapeHtml(allocation.orderId)}</strong>
-      <span>${escapeHtml(allocation.customer)} · ${allocation.quantity.toLocaleString()} 片</span>
-      <span>${priorityLabel(allocation.priority)} · ${escapeHtml(allocation.status)}</span>
+      <span>${escapeHtml(allocation.customer ?? "Preview")} · ${allocation.quantity.toLocaleString()} 片</span>
+      <span>${priorityLabel(allocation.priority)} · ${escapeHtml(allocation.status ?? "試排")}</span>
     </div>
   `;
 }
@@ -292,7 +544,16 @@ function updateSelectedCount() {
 }
 
 function scheduleFormData() {
-  return Object.fromEntries(new FormData(document.getElementById("schedule-form")));
+  const data = Object.fromEntries(new FormData(document.getElementById("schedule-form")));
+  data.manualForce = data.manualForce === "on";
+  data.orderIds = Array.from(state.selectedOrderIds);
+  return data;
+}
+
+function orderFormData() {
+  const data = Object.fromEntries(new FormData(document.getElementById("order-form")));
+  data.quantity = Number(data.quantity);
+  return data;
 }
 
 async function request(path, options = {}, needsAuth = true) {
@@ -302,16 +563,16 @@ async function request(path, options = {}, needsAuth = true) {
   };
   if (needsAuth) {
     if (!state.token) {
-      throw new Error("please login first");
+      throw new Error("請先登入");
     }
     headers.Authorization = `Bearer ${state.token}`;
   }
   const response = await fetch(path, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    renderOutput("schedule-output", payload);
     if (response.status === 401) {
       clearSession();
+      renderAuthState();
     }
     throw new Error(payload.error ?? "request failed");
   }
@@ -323,17 +584,43 @@ function saveSession(token, user) {
   state.user = user;
   localStorage.setItem("woms.token", token);
   localStorage.setItem("woms.user", JSON.stringify(user));
+  renderAuthState();
 }
 
 function clearSession() {
   state.token = "";
   state.user = null;
+  state.orders = [];
+  state.calendarAllocations = [];
+  state.preview = null;
+  state.selectedOrderIds.clear();
   localStorage.removeItem("woms.token");
   localStorage.removeItem("woms.user");
 }
 
-function renderOutput(id, value) {
-  document.getElementById(id).textContent = JSON.stringify(value, null, 2);
+function showMessage(title, body, type = "info", details = "") {
+  const dialog = document.getElementById("message-dialog");
+  document.getElementById("message-title").textContent = title;
+  document.getElementById("message-body").textContent = body;
+  const detailsNode = document.getElementById("message-details");
+  detailsNode.hidden = !details;
+  detailsNode.textContent = details;
+  dialog.dataset.type = type;
+  if (dialog.open) {
+    dialog.close();
+  }
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    window.alert(`${title}\n${body}`);
+  }
+}
+
+function firstPreviewDate(allocations) {
+  if (!allocations.length) {
+    return null;
+  }
+  return new Date(allocations[0].date);
 }
 
 function dateOnly(value) {

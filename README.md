@@ -98,6 +98,7 @@ GitHub Actions Docker Hub settings:
 
 Demo accounts:
 
+- Admin: `admin` / `demo`
 - Sales: `sales` / `demo`
 - Line A scheduler: `scheduler-a` / `demo`
 - Line B scheduler: `scheduler-b` / `demo`
@@ -135,10 +136,15 @@ Default services:
 Frontend behavior:
 
 - Login is stored in browser `localStorage`, so refresh keeps the current session until the JWT expires or is rejected.
-- Exact filters support customer, production line, status, and priority. Multiple values in one field are OR; different fields are AND.
-- The status sidebar shows the four WOMS statuses and toggles exact status filters.
-- Schedule preview displays allocation cards without saving them.
-- Creating a schedule job saves allocations in the in-memory API store and renders them in the monthly schedule calendar by actual scheduled date.
+- After login, the username/password form is hidden and the header shows the current account with a logout action.
+- Admin users can assign account roles and scheduler production lines from the Admin panel. Non-admin users receive `403`.
+- Exact filters support customer, production line, status, and priority. Customer/line/priority allow multi-select OR inside the field; status is single-select.
+- Schedule preview opens a confirmation page, highlights preview allocations on the calendar, and does not persist changes.
+- Sales users preview a draft order first, then confirm whether to put it into pending orders.
+- Scheduler users must preview selected pending orders first, then confirm execution from the preview page. Direct schedule-job creation without `previewId` is rejected.
+- Popup dialogs are used for warnings, permission failures, and operation results.
+- `scheduler-a` demo order `ORD-2` now has a persisted demo allocation, so it appears on the monthly calendar.
+- The conflict demo button creates several same-day orders so the preview can show a conflict report.
 
 Persistence note:
 
@@ -194,7 +200,9 @@ GitHub Actions runs:
 - `gofmt` check
 - API, worker, and web Docker builds
 - Helm rendering
-- Docker Hub push and tagging
+- Docker Hub push and tagging on `main`, `release/**`, or manual dispatch
+- Automatic Helm image tag update on `main`
+- Automatic Git tag creation on every successful `main` publish, using `v0.1.<run-number>` by default
 
 Required GitHub repository settings:
 
@@ -202,7 +210,7 @@ Required GitHub repository settings:
 - Variable: `DOCKERHUB_USERNAME`
 - Variable: `DOCKERHUB_NAMESPACE`
 
-Image tags include branch tags and short SHA. Production `latest` is reserved for the protected release/main flow.
+Image tags include the release tag, short SHA, and `latest` for the protected main/release publish flow. The `docker-publish` workflow commits the release tag back into `deploy/helm/woms/values.yaml` with `[skip ci]`, then creates the matching Git tag.
 
 Branch workflow:
 

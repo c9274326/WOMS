@@ -149,6 +149,11 @@ kubectl get hpa -n woms -w
 
 - 在 `http://127.0.0.1:8081` 登入。
 - 重新整理瀏覽器，確認 session 會恢復。
-- 切換客戶、產線、狀態、優先級精準篩選。
-- 使用試排程，確認 allocation cards 會渲染。
-- 建立排程任務，確認月曆顯示實際排程日 allocations。
+- 確認登入後會隱藏帳號密碼欄位，頁首顯示目前帳號與登出按鈕。
+- 使用 `admin` / `demo` 登入，確認 Admin panel 可見，且非 admin 看不到。
+- 切換客戶、產線、優先級精準篩選；確認狀態篩選是單選。
+- 用 sales 建立草稿訂單 preview，確認 preview page 會高亮日曆結果，再確認放到待排程訂單。
+- 用 scheduler 選取待排程訂單，先 preview，再從 preview page 確認執行。缺少 `previewId` 的直接排程 API 必須失敗。
+- 刪除已選取的待排程/已排程訂單，確認被刪除訂單的月曆 allocation 也會消失。
+- 使用衝突測試按鈕建立同日大量訂單，preview 後確認會顯示衝突報告。
+- 確認權限不足與操作錯誤都會用彈出訊息視窗顯示。

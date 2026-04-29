@@ -49,6 +49,48 @@ func TestSalesCannotCreateScheduleJob(t *testing.T) {
 	}
 }
 
+func TestSchedulerCannotCreateScheduleJobWithoutPreview(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "scheduler-a", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestOnlyAdminCanAssignUsers(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"username":"scheduler-a","role":"scheduler","lineId":"B"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", res.Code, res.Body.String())
+	}
+
+	adminToken := login(t, server, "admin", "demo")
+	body = bytes.NewBufferString(`{"username":"scheduler-a","role":"scheduler","lineId":"B"}`)
+	req = httptest.NewRequest(http.MethodPatch, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	res = httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestOrderValidationRejectsInvalidQuantity(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	token := login(t, server, "sales", "demo")
@@ -196,6 +238,68 @@ func TestSchedulerCannotReadAnotherLineCalendar(t *testing.T) {
 	}
 }
 
+func TestSalesConfirmsDraftPreviewIntoPendingOrder(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var preview struct {
+		PreviewID string `json:"previewId"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+
+	body = bytes.NewBufferString(`{"previewId":"` + preview.PreviewID + `"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders/preview-confirm", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("confirm preview failed: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestDeleteOrdersRemovesScheduledAllocation(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+
+	body := bytes.NewBufferString(`{"orderIds":["ORD-1"]}`)
+	req := httptest.NewRequest(http.MethodDelete, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete failed: %d %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-05", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("calendar failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []any `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode calendar response: %v", err)
+	}
+	if len(payload.Allocations) != 0 {
+		t.Fatalf("expected allocation removed, got %+v", payload.Allocations)
+	}
+}
+
 func login(t *testing.T, server *Server, username, password string) string {
 	t.Helper()
 	body := bytes.NewBufferString(`{"username":"` + username + `","password":"` + password + `"}`)
@@ -228,7 +332,8 @@ func createOrder(t *testing.T, server *Server, token, lineID string) {
 
 func createScheduleJob(t *testing.T, server *Server, token, lineID string) string {
 	t.Helper()
-	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01"}`)
+	previewID := createSchedulePreview(t, server, token, lineID)
+	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res := httptest.NewRecorder()
@@ -243,4 +348,23 @@ func createScheduleJob(t *testing.T, server *Server, token, lineID string) strin
 		t.Fatalf("decode job response: %v", err)
 	}
 	return payload.ID
+}
+
+func createSchedulePreview(t *testing.T, server *Server, token, lineID string) string {
+	t.Helper()
+	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create schedule preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		PreviewID string `json:"previewId"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	return payload.PreviewID
 }

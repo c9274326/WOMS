@@ -47,6 +47,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleIngressAuth(w, r)
 	case r.URL.Path == "/api/orders":
 		s.handleOrders(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/preview-confirm":
+		s.handleConfirmPreviewOrder(w, r)
+	case r.URL.Path == "/api/users":
+		s.handleUsers(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/demo/conflict-orders":
+		s.handleDemoConflictOrders(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/schedules/preview":
 		s.handleSchedulePreview(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/schedules/calendar":
@@ -127,9 +133,97 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, order)
+	case http.MethodDelete:
+		var req deleteOrdersRequest
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		result, err := s.store.DeleteOrders(req, claims)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) handleConfirmPreviewOrder(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleSales {
+		writeError(w, http.StatusForbidden, "only sales can confirm preview orders")
+		return
+	}
+	var req confirmPreviewRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	order, err := s.store.ConfirmPreviewOrder(req.PreviewID, claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, order)
+}
+
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleAdmin {
+		writeError(w, http.StatusForbidden, "only admin can manage accounts")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"users": s.store.ListUsers()})
+	case http.MethodPatch:
+		var req assignUserRequest
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		user, err := s.store.AssignUser(req, claims.Subject)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, user)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleDemoConflictOrders(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleAdmin && claims.Role != domain.RoleScheduler {
+		writeError(w, http.StatusForbidden, "only admin or schedulers can create demo conflict orders")
+		return
+	}
+	var req demoConflictRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	orders, err := s.store.CreateDemoConflictOrders(req, claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"orders": orders})
 }
 
 func (s *Server) handleSchedulePreview(w http.ResponseWriter, r *http.Request) {
@@ -245,23 +339,26 @@ func (s *Server) claimsFromRequest(r *http.Request) (auth.Claims, error) {
 }
 
 type MemoryStore struct {
-	mu          sync.Mutex
-	nextOrderID int
-	nextJobID   int
-	nextAuditID int
-	lines       map[string]domain.ProductionLine
-	users       map[string]domain.User
-	orders      map[string]domain.Order
-	jobs        map[string]domain.ScheduleJob
-	allocations []domain.ScheduleAllocation
-	audits      []domain.AuditEntry
+	mu            sync.Mutex
+	nextOrderID   int
+	nextJobID     int
+	nextAuditID   int
+	nextPreviewID int
+	lines         map[string]domain.ProductionLine
+	users         map[string]domain.User
+	orders        map[string]domain.Order
+	jobs          map[string]domain.ScheduleJob
+	allocations   []domain.ScheduleAllocation
+	previews      map[string]previewRecord
+	audits        []domain.AuditEntry
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		nextOrderID: 1,
-		nextJobID:   1,
-		nextAuditID: 1,
+		nextOrderID:   1,
+		nextJobID:     1,
+		nextAuditID:   1,
+		nextPreviewID: 1,
 		lines: map[string]domain.ProductionLine{
 			"A": {ID: "A", Name: "Line A", CapacityPerDay: 10000},
 			"B": {ID: "B", Name: "Line B", CapacityPerDay: 10000},
@@ -269,6 +366,7 @@ func NewMemoryStore() *MemoryStore {
 			"D": {ID: "D", Name: "Line D", CapacityPerDay: 10000},
 		},
 		users: map[string]domain.User{
+			"admin":       {ID: "user-admin", Username: "admin", PasswordHash: "demo", Role: domain.RoleAdmin},
 			"sales":       {ID: "user-sales", Username: "sales", PasswordHash: "demo", Role: domain.RoleSales},
 			"scheduler-a": {ID: "user-scheduler-a", Username: "scheduler-a", PasswordHash: "demo", Role: domain.RoleScheduler, LineID: "A"},
 			"scheduler-b": {ID: "user-scheduler-b", Username: "scheduler-b", PasswordHash: "demo", Role: domain.RoleScheduler, LineID: "B"},
@@ -278,6 +376,7 @@ func NewMemoryStore() *MemoryStore {
 		orders:      map[string]domain.Order{},
 		jobs:        map[string]domain.ScheduleJob{},
 		allocations: []domain.ScheduleAllocation{},
+		previews:    map[string]previewRecord{},
 	}
 }
 
@@ -299,10 +398,54 @@ type createOrderRequest struct {
 	DueDate  string          `json:"dueDate"`
 }
 
+type deleteOrdersRequest struct {
+	OrderIDs []string `json:"orderIds"`
+}
+
+type deleteOrdersResponse struct {
+	DeletedOrderIDs []string `json:"deletedOrderIds"`
+	SkippedOrderIDs []string `json:"skippedOrderIds,omitempty"`
+}
+
+type assignUserRequest struct {
+	Username string      `json:"username"`
+	Role     domain.Role `json:"role"`
+	LineID   string      `json:"lineId"`
+}
+
+type confirmPreviewRequest struct {
+	PreviewID string `json:"previewId"`
+}
+
+type demoConflictRequest struct {
+	LineID  string `json:"lineId"`
+	DueDate string `json:"dueDate"`
+	Count   int    `json:"count"`
+}
+
+type previewRecord struct {
+	ActorID    string
+	ActorRole  domain.Role
+	Request    scheduleRequest
+	DraftOrder *createOrderRequest
+	CreatedAt  time.Time
+}
+
+type schedulePreviewResponse struct {
+	PreviewID   string                 `json:"previewId"`
+	Allocations []scheduler.Allocation `json:"allocations"`
+	Conflicts   []scheduler.Conflict   `json:"conflicts"`
+	FinishDate  time.Time              `json:"finishDate"`
+	DraftOrder  *createOrderRequest    `json:"draftOrder,omitempty"`
+}
+
 func (s *MemoryStore) CreateOrder(req createOrderRequest, actorID string) (domain.Order, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createOrderLocked(req, actorID)
+}
 
+func (s *MemoryStore) createOrderLocked(req createOrderRequest, actorID string) (domain.Order, error) {
 	if req.Customer == "" || req.Quantity < 25 || req.Quantity > 2500 {
 		return domain.Order{}, errors.New("customer is required and quantity must be between 25 and 2500")
 	}
@@ -357,23 +500,131 @@ func (s *MemoryStore) ListOrders(claims auth.Claims) []domain.Order {
 	return orders
 }
 
-type scheduleRequest struct {
-	LineID      string   `json:"lineId"`
-	StartDate   string   `json:"startDate"`
-	OrderIDs    []string `json:"orderIds"`
-	ManualForce bool     `json:"manualForce"`
-	Reason      string   `json:"reason"`
-}
-
-func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (scheduler.Result, error) {
+func (s *MemoryStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims) (deleteOrdersResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.planLocked(req, claims)
+
+	if len(req.OrderIDs) == 0 {
+		return deleteOrdersResponse{}, errors.New("orderIds is required")
+	}
+	result := deleteOrdersResponse{}
+	for _, id := range req.OrderIDs {
+		order, ok := s.orders[id]
+		if !ok {
+			result.SkippedOrderIDs = append(result.SkippedOrderIDs, id)
+			continue
+		}
+		if claims.Role == domain.RoleSales && order.CreatedBy != claims.Subject {
+			return deleteOrdersResponse{}, errors.New("sales can delete only their own orders")
+		}
+		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
+			return deleteOrdersResponse{}, errors.New("cannot delete another production line")
+		}
+		if claims.Role != domain.RoleAdmin && claims.Role != domain.RoleSales && claims.Role != domain.RoleScheduler {
+			return deleteOrdersResponse{}, errors.New("role cannot delete orders")
+		}
+		if order.Status == domain.StatusInProgress || order.Status == domain.StatusCompleted {
+			return deleteOrdersResponse{}, errors.New("cannot delete in-progress or completed orders")
+		}
+		delete(s.orders, id)
+		s.removeAllocationsLocked(id)
+		s.auditLocked(claims.Subject, "order.delete", id, "")
+		result.DeletedOrderIDs = append(result.DeletedOrderIDs, id)
+	}
+	return result, nil
+}
+
+func (s *MemoryStore) ListUsers() []domain.User {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	users := make([]domain.User, 0, len(s.users))
+	for _, user := range s.users {
+		users = append(users, user)
+	}
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].Username < users[j].Username
+	})
+	return users
+}
+
+func (s *MemoryStore) AssignUser(req assignUserRequest, actorID string) (domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	user, ok := s.users[req.Username]
+	if !ok {
+		return domain.User{}, errors.New("user not found")
+	}
+	if req.Role != domain.RoleAdmin && req.Role != domain.RoleSales && req.Role != domain.RoleScheduler {
+		return domain.User{}, errors.New("role must be admin, sales, or scheduler")
+	}
+	if req.Role == domain.RoleScheduler {
+		if _, ok := s.lines[req.LineID]; !ok {
+			return domain.User{}, errors.New("scheduler lineId must be A, B, C, or D")
+		}
+	} else {
+		req.LineID = ""
+	}
+	user.Role = req.Role
+	user.LineID = req.LineID
+	s.users[user.Username] = user
+	s.auditLocked(actorID, "user.assign", user.ID, string(req.Role)+" "+req.LineID)
+	return user, nil
+}
+
+type scheduleRequest struct {
+	LineID      string              `json:"lineId"`
+	StartDate   string              `json:"startDate"`
+	OrderIDs    []string            `json:"orderIds"`
+	ManualForce bool                `json:"manualForce"`
+	Reason      string              `json:"reason"`
+	PreviewID   string              `json:"previewId"`
+	DraftOrder  *createOrderRequest `json:"draftOrder,omitempty"`
+}
+
+func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.planLocked(req, claims)
+	if err != nil {
+		return schedulePreviewResponse{}, err
+	}
+	id := "PREVIEW-" + strconv.Itoa(s.nextPreviewID)
+	s.nextPreviewID++
+	s.previews[id] = previewRecord{
+		ActorID:    claims.Subject,
+		ActorRole:  claims.Role,
+		Request:    normalizedPreviewRequest(req),
+		DraftOrder: req.DraftOrder,
+		CreatedAt:  time.Now().UTC(),
+	}
+	return schedulePreviewResponse{
+		PreviewID:   id,
+		Allocations: result.Allocations,
+		Conflicts:   result.Conflicts,
+		FinishDate:  result.FinishDate,
+		DraftOrder:  req.DraftOrder,
+	}, nil
 }
 
 func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims) (domain.ScheduleJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if req.PreviewID == "" {
+		return domain.ScheduleJob{}, errors.New("previewId is required before creating a schedule job")
+	}
+	preview, ok := s.previews[req.PreviewID]
+	if !ok {
+		return domain.ScheduleJob{}, errors.New("preview result expired or not found")
+	}
+	if preview.ActorID != claims.Subject || preview.ActorRole != claims.Role {
+		return domain.ScheduleJob{}, errors.New("preview result belongs to another user")
+	}
+	if !sameScheduleRequest(preview.Request, normalizedPreviewRequest(req)) {
+		return domain.ScheduleJob{}, errors.New("schedule request changed after preview")
+	}
 
 	jobLine := req.LineID
 	if jobLine == "" {
@@ -413,6 +664,7 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 	job.UpdatedAt = time.Now().UTC()
 	s.jobs[id] = job
 	s.persistAllocationsLocked(result.Allocations)
+	delete(s.previews, req.PreviewID)
 	s.auditLocked(claims.Subject, "schedule.job.create", id, req.Reason)
 	return job, nil
 }
@@ -551,6 +803,9 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 	if lineID == "" {
 		return scheduler.Result{}, errors.New("lineId is required")
 	}
+	if req.ManualForce && strings.TrimSpace(req.Reason) == "" {
+		return scheduler.Result{}, errors.New("manual force requires a reason")
+	}
 	if claims.Role == domain.RoleScheduler && claims.LineID != lineID {
 		return scheduler.Result{}, errors.New("cannot access another production line")
 	}
@@ -572,6 +827,32 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 		selected[id] = true
 	}
 	inputs := []scheduler.OrderInput{}
+	if req.DraftOrder != nil {
+		if claims.Role != domain.RoleSales {
+			return scheduler.Result{}, errors.New("only sales can preview draft orders")
+		}
+		draft := *req.DraftOrder
+		if draft.LineID == "" {
+			draft.LineID = lineID
+		}
+		if draft.LineID != lineID {
+			return scheduler.Result{}, errors.New("draft order line must match preview line")
+		}
+		if draft.Priority == "" {
+			draft.Priority = domain.PriorityLow
+		}
+		dueDate, err := validateOrderRequest(draft, s.lines)
+		if err != nil {
+			return scheduler.Result{}, err
+		}
+		inputs = append(inputs, scheduler.OrderInput{
+			ID:       "PREVIEW-DRAFT",
+			LineID:   draft.LineID,
+			Quantity: draft.Quantity,
+			Priority: draft.Priority,
+			DueDate:  dueDate,
+		})
+	}
 	for _, order := range s.orders {
 		if order.LineID != lineID || order.Status != domain.StatusPending {
 			continue
@@ -629,6 +910,123 @@ func (s *MemoryStore) persistAllocationsLocked(allocations []scheduler.Allocatio
 	}
 }
 
+func (s *MemoryStore) ConfirmPreviewOrder(previewID string, claims auth.Claims) (domain.Order, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	preview, ok := s.previews[previewID]
+	if !ok {
+		return domain.Order{}, errors.New("preview result expired or not found")
+	}
+	if preview.ActorID != claims.Subject || preview.ActorRole != claims.Role {
+		return domain.Order{}, errors.New("preview result belongs to another user")
+	}
+	if preview.DraftOrder == nil {
+		return domain.Order{}, errors.New("preview does not contain a draft order")
+	}
+	order, err := s.createOrderLocked(*preview.DraftOrder, claims.Subject)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	delete(s.previews, previewID)
+	return order, nil
+}
+
+func (s *MemoryStore) CreateDemoConflictOrders(req demoConflictRequest, claims auth.Claims) ([]domain.Order, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lineID := req.LineID
+	if lineID == "" && claims.Role == domain.RoleScheduler {
+		lineID = claims.LineID
+	}
+	if claims.Role == domain.RoleScheduler && lineID != claims.LineID {
+		return nil, errors.New("cannot create demo orders for another production line")
+	}
+	if _, ok := s.lines[lineID]; !ok {
+		return nil, errors.New("production line does not exist")
+	}
+	if req.Count == 0 {
+		req.Count = 6
+	}
+	if req.Count < 5 || req.Count > 20 {
+		return nil, errors.New("count must be between 5 and 20")
+	}
+	if req.DueDate == "" {
+		req.DueDate = time.Now().UTC().AddDate(0, 0, 1).Format(dateLayout)
+	}
+
+	orders := make([]domain.Order, 0, req.Count)
+	for index := 1; index <= req.Count; index++ {
+		order, err := s.createOrderLocked(createOrderRequest{
+			Customer: "Conflict Demo " + strconv.Itoa(index),
+			LineID:   lineID,
+			Quantity: 2500,
+			Priority: domain.PriorityLow,
+			DueDate:  req.DueDate,
+		}, claims.Subject)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, order)
+	}
+	return orders, nil
+}
+
+func (s *MemoryStore) removeAllocationsLocked(orderID string) {
+	kept := s.allocations[:0]
+	for _, allocation := range s.allocations {
+		if allocation.OrderID != orderID {
+			kept = append(kept, allocation)
+		}
+	}
+	s.allocations = kept
+}
+
+func validateOrderRequest(req createOrderRequest, lines map[string]domain.ProductionLine) (time.Time, error) {
+	if req.Customer == "" || req.Quantity < 25 || req.Quantity > 2500 {
+		return time.Time{}, errors.New("customer is required and quantity must be between 25 and 2500")
+	}
+	if _, ok := lines[req.LineID]; !ok {
+		return time.Time{}, errors.New("production line does not exist")
+	}
+	if req.Priority == "" {
+		req.Priority = domain.PriorityLow
+	}
+	if req.Priority != domain.PriorityLow && req.Priority != domain.PriorityHigh {
+		return time.Time{}, errors.New("priority must be low or high")
+	}
+	dueDate, err := time.Parse(dateLayout, req.DueDate)
+	if err != nil {
+		return time.Time{}, errors.New("dueDate must use YYYY-MM-DD")
+	}
+	return dueDate, nil
+}
+
+func normalizedPreviewRequest(req scheduleRequest) scheduleRequest {
+	normalized := req
+	normalized.PreviewID = ""
+	normalized.DraftOrder = nil
+	normalized.OrderIDs = append([]string(nil), req.OrderIDs...)
+	sort.Strings(normalized.OrderIDs)
+	return normalized
+}
+
+func sameScheduleRequest(a, b scheduleRequest) bool {
+	if a.LineID != b.LineID || a.StartDate != b.StartDate || a.ManualForce != b.ManualForce || a.Reason != b.Reason {
+		return false
+	}
+	if len(a.OrderIDs) != len(b.OrderIDs) {
+		return false
+	}
+	for index := range a.OrderIDs {
+		if a.OrderIDs[index] != b.OrderIDs[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func truncateDate(value time.Time) time.Time {
 	year, month, day := value.Date()
 	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
@@ -667,7 +1065,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

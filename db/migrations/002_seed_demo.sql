@@ -1,5 +1,6 @@
 INSERT INTO users (id, username, password_hash, role, line_id)
 VALUES
+    ('user-admin', 'admin', 'demo', 'admin', NULL),
     ('user-sales', 'sales', 'demo', 'sales', NULL),
     ('user-scheduler-a', 'scheduler-a', 'demo', 'scheduler', 'A'),
     ('user-scheduler-b', 'scheduler-b', 'demo', 'scheduler', 'B'),
