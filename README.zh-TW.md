@@ -89,6 +89,13 @@ cp .env.example .env
 - `KAFKA_SCHEDULE_TOPIC`: 排程任務 topic。
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace。
 
+GitHub Actions Docker Hub 設定：
+
+- Repository secret `DOCKERHUB_TOKEN`: Docker Hub Personal Access Token，權限需 Read & Write。
+- Repository variable `DOCKERHUB_USERNAME`: Docker Hub username。
+- Repository variable `DOCKERHUB_NAMESPACE`: Docker Hub username 或 organization namespace。
+- 使用 repository-level Actions 設定即可。目前 workflows 沒有宣告 `environment:`，不需要 environment-level settings。
+
 Demo 帳號：
 
 - 業務：`sales` / `demo`
@@ -124,6 +131,14 @@ docker compose up --build
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 - Kafka: `localhost:9092`
+
+前端行為：
+
+- 登入狀態會存在瀏覽器 `localStorage`，重新整理後會保留 session，直到 JWT 過期或被 API 拒絕。
+- 精準篩選支援客戶、產線、狀態、優先級。同欄位多選是 OR，不同欄位之間是 AND。
+- 狀態側邊欄顯示 WOMS 四種狀態，並可切換精準狀態篩選。
+- 試排程會顯示 allocation cards，但不保存。
+- 建立排程任務後會把 allocations 存在目前的 in-memory API store，並依實際排程日渲染在月曆。
 
 資料持久化說明：
 

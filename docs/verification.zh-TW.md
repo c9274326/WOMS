@@ -55,6 +55,12 @@ curl -i http://localhost:8080/api/schedules/jobs \
 - 用 `scheduler-a` 查詢該 job。
 - 期望：`403 Forbidden`。
 
+檢查月曆行為：
+
+- 用排程工程師建立排程任務。
+- `GET /api/schedules/calendar?lineId=A&month=2026-05` 會回傳已保存 allocations。
+- 查詢其他排程工程師的產線會回錯誤。
+
 ## 3. Docker 驗證
 
 ```bash
@@ -138,3 +144,11 @@ kubectl get hpa -n woms -w
 - `.gitignore` 已涵蓋新增 generated/local files。
 - Docker/Helm/CI 設定同步。
 - `git add`、commit、push 完成。
+
+## 9. 前端 Smoke 驗證
+
+- 在 `http://127.0.0.1:8081` 登入。
+- 重新整理瀏覽器，確認 session 會恢復。
+- 切換客戶、產線、狀態、優先級精準篩選。
+- 使用試排程，確認 allocation cards 會渲染。
+- 建立排程任務，確認月曆顯示實際排程日 allocations。

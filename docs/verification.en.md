@@ -55,6 +55,12 @@ Check scheduler line isolation:
 - Query that job as `scheduler-a`.
 - Expected: `403 Forbidden`.
 
+Check calendar behavior:
+
+- Create a schedule job as a scheduler user.
+- `GET /api/schedules/calendar?lineId=A&month=2026-05` returns persisted allocations.
+- Querying another scheduler's line returns an error.
+
 ## 3. Docker Verification
 
 ```bash
@@ -138,3 +144,11 @@ Submit jobs for different lines:
 - `.gitignore` covers generated/local files.
 - Docker/Helm/CI settings are synced.
 - `git add`, commit, and push are completed.
+
+## 9. Frontend Smoke Verification
+
+- Login at `http://127.0.0.1:8081`.
+- Refresh the browser and confirm the session is restored.
+- Toggle exact filters for customer, line, status, and priority.
+- Use schedule preview and confirm allocation cards render.
+- Create a schedule job and confirm the monthly calendar shows actual scheduled-date allocations.

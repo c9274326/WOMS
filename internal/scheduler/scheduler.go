@@ -30,19 +30,19 @@ type ExistingAllocation struct {
 }
 
 type Allocation struct {
-	OrderID  string
-	LineID   string
-	Date     time.Time
-	Quantity int
-	Priority domain.Priority
-	Locked   bool
+	OrderID  string          `json:"orderId"`
+	LineID   string          `json:"lineId"`
+	Date     time.Time       `json:"date"`
+	Quantity int             `json:"quantity"`
+	Priority domain.Priority `json:"priority"`
+	Locked   bool            `json:"locked"`
 }
 
 type Conflict struct {
-	OrderID            string
-	Reason             string
-	EarliestFinishDate time.Time
-	AffectedOrderIDs   []string
+	OrderID            string    `json:"orderId"`
+	Reason             string    `json:"reason"`
+	EarliestFinishDate time.Time `json:"earliestFinishDate"`
+	AffectedOrderIDs   []string  `json:"affectedOrderIds,omitempty"`
 }
 
 type Request struct {
@@ -56,9 +56,9 @@ type Request struct {
 }
 
 type Result struct {
-	Allocations []Allocation
-	Conflicts   []Conflict
-	FinishDate  time.Time
+	Allocations []Allocation `json:"allocations"`
+	Conflicts   []Conflict   `json:"conflicts"`
+	FinishDate  time.Time    `json:"finishDate"`
 }
 
 func Plan(req Request) (Result, error) {

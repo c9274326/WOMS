@@ -26,6 +26,12 @@
     </header>
 
     <main class="layout">
+      <aside class="panel status-panel">
+        <p class="eyebrow">Status</p>
+        <h2>訂單狀態</h2>
+        <div id="status-sidebar" class="status-list"></div>
+      </aside>
+
       <section class="panel panel-main">
         <div class="panel-heading">
           <div>
@@ -33,11 +39,32 @@
             <h2>訂單管理</h2>
           </div>
           <div class="toolbar">
-            <label class="search-box">
-              <span>查詢</span>
-              <input id="order-search" placeholder="訂單、客戶、產線">
-            </label>
             <button id="refresh-orders" type="button">重新整理</button>
+          </div>
+        </div>
+
+        <div class="filter-panel">
+          <div>
+            <p class="eyebrow">Exact Filters</p>
+            <h3>精準篩選</h3>
+          </div>
+          <div class="filter-grid">
+            <fieldset>
+              <legend>客戶</legend>
+              <div id="customer-filters" class="check-list"></div>
+            </fieldset>
+            <fieldset>
+              <legend>產線</legend>
+              <div id="line-filters" class="check-list"></div>
+            </fieldset>
+            <fieldset>
+              <legend>狀態</legend>
+              <div id="status-filters" class="check-list"></div>
+            </fieldset>
+            <fieldset>
+              <legend>優先級</legend>
+              <div id="priority-filters" class="check-list"></div>
+            </fieldset>
           </div>
         </div>
 
@@ -95,6 +122,31 @@
           <span id="selected-count">已選取 0 張訂單</span>
           <button id="preview-selected" type="button">試排選取訂單</button>
         </div>
+
+        <section class="calendar-section">
+          <div class="panel-heading compact-heading">
+            <div>
+              <p class="eyebrow">Calendar</p>
+              <h2>月排程</h2>
+            </div>
+            <div class="calendar-controls">
+              <button id="prev-month" type="button">上個月</button>
+              <strong id="calendar-title"></strong>
+              <button id="today-month" type="button">今天</button>
+              <button id="next-month" type="button">下個月</button>
+            </div>
+          </div>
+          <div class="calendar-weekdays">
+            <span>日</span>
+            <span>一</span>
+            <span>二</span>
+            <span>三</span>
+            <span>四</span>
+            <span>五</span>
+            <span>六</span>
+          </div>
+          <div id="calendar-grid" class="calendar-grid"></div>
+        </section>
       </section>
 
       <aside class="panel side-panel">
@@ -121,6 +173,10 @@
           <button name="action" value="preview" type="submit">試排程</button>
           <button name="action" value="job" type="submit">建立排程任務</button>
         </form>
+        <div class="preview-panel">
+          <p class="eyebrow">Preview Result</p>
+          <div id="preview-list" class="preview-list">尚未試排</div>
+        </div>
         <pre id="schedule-output" class="output">尚未執行</pre>
       </aside>
     </main>

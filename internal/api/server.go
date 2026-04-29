@@ -49,6 +49,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleOrders(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/schedules/preview":
 		s.handleSchedulePreview(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/schedules/calendar":
+		s.handleScheduleCalendar(w, r)
 	case r.URL.Path == "/api/schedules/jobs":
 		s.handleScheduleJobs(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/schedules/jobs/"):
@@ -149,6 +151,22 @@ func (s *Server) handleSchedulePreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleScheduleCalendar(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	lineID := r.URL.Query().Get("lineId")
+	month := r.URL.Query().Get("month")
+	result, err := s.store.ScheduleCalendar(lineID, month, claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleScheduleJobs(w http.ResponseWriter, r *http.Request) {
 	claims, err := s.claimsFromRequest(r)
 	if err != nil {
@@ -235,6 +253,7 @@ type MemoryStore struct {
 	users       map[string]domain.User
 	orders      map[string]domain.Order
 	jobs        map[string]domain.ScheduleJob
+	allocations []domain.ScheduleAllocation
 	audits      []domain.AuditEntry
 }
 
@@ -256,8 +275,9 @@ func NewMemoryStore() *MemoryStore {
 			"scheduler-c": {ID: "user-scheduler-c", Username: "scheduler-c", PasswordHash: "demo", Role: domain.RoleScheduler, LineID: "C"},
 			"scheduler-d": {ID: "user-scheduler-d", Username: "scheduler-d", PasswordHash: "demo", Role: domain.RoleScheduler, LineID: "D"},
 		},
-		orders: map[string]domain.Order{},
-		jobs:   map[string]domain.ScheduleJob{},
+		orders:      map[string]domain.Order{},
+		jobs:        map[string]domain.ScheduleJob{},
+		allocations: []domain.ScheduleAllocation{},
 	}
 }
 
@@ -372,9 +392,17 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 	job.Status = domain.JobRunning
 	job.UpdatedAt = time.Now().UTC()
 	s.jobs[id] = job
-	if _, err := s.planLocked(req, claims); err != nil {
+	result, err := s.planLocked(req, claims)
+	if err != nil {
 		job.Status = domain.JobFailed
 		job.Message = err.Error()
+		job.UpdatedAt = time.Now().UTC()
+		s.jobs[id] = job
+		return job, nil
+	}
+	if len(result.Conflicts) > 0 {
+		job.Status = domain.JobFailed
+		job.Message = "schedule conflicts require review"
 		job.UpdatedAt = time.Now().UTC()
 		s.jobs[id] = job
 		return job, nil
@@ -384,6 +412,7 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 	job.Message = "schedule job accepted by foundation scheduler"
 	job.UpdatedAt = time.Now().UTC()
 	s.jobs[id] = job
+	s.persistAllocationsLocked(result.Allocations)
 	s.auditLocked(claims.Subject, "schedule.job.create", id, req.Reason)
 	return job, nil
 }
@@ -393,6 +422,81 @@ func (s *MemoryStore) GetScheduleJob(id string) (domain.ScheduleJob, bool) {
 	defer s.mu.Unlock()
 	job, ok := s.jobs[id]
 	return job, ok
+}
+
+type calendarAllocation struct {
+	OrderID  string             `json:"orderId"`
+	Customer string             `json:"customer"`
+	LineID   string             `json:"lineId"`
+	Date     time.Time          `json:"date"`
+	Quantity int                `json:"quantity"`
+	Priority domain.Priority    `json:"priority"`
+	Status   domain.OrderStatus `json:"status"`
+	Locked   bool               `json:"locked"`
+	DueDate  time.Time          `json:"dueDate"`
+}
+
+type calendarResponse struct {
+	LineID      string               `json:"lineId"`
+	Month       string               `json:"month"`
+	Allocations []calendarAllocation `json:"allocations"`
+}
+
+func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims) (calendarResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if lineID == "" && claims.Role == domain.RoleScheduler {
+		lineID = claims.LineID
+	}
+	if lineID == "" {
+		return calendarResponse{}, errors.New("lineId is required")
+	}
+	if claims.Role == domain.RoleScheduler && claims.LineID != lineID {
+		return calendarResponse{}, errors.New("cannot access another production line")
+	}
+	if _, ok := s.lines[lineID]; !ok {
+		return calendarResponse{}, errors.New("production line does not exist")
+	}
+	if month == "" {
+		month = time.Now().UTC().Format("2006-01")
+	}
+	monthStart, err := time.Parse("2006-01", month)
+	if err != nil {
+		return calendarResponse{}, errors.New("month must use YYYY-MM")
+	}
+	monthEnd := monthStart.AddDate(0, 1, 0)
+
+	allocations := []calendarAllocation{}
+	for _, allocation := range s.allocations {
+		if allocation.LineID != lineID {
+			continue
+		}
+		allocationDate := truncateDate(allocation.Date)
+		if allocationDate.Before(monthStart) || !allocationDate.Before(monthEnd) {
+			continue
+		}
+		order := s.orders[allocation.OrderID]
+		allocations = append(allocations, calendarAllocation{
+			OrderID:  allocation.OrderID,
+			Customer: order.Customer,
+			LineID:   allocation.LineID,
+			Date:     allocationDate,
+			Quantity: allocation.Quantity,
+			Priority: allocation.Priority,
+			Status:   order.Status,
+			Locked:   allocation.Locked,
+			DueDate:  order.DueDate,
+		})
+	}
+	sort.Slice(allocations, func(i, j int) bool {
+		if !allocations[i].Date.Equal(allocations[j].Date) {
+			return allocations[i].Date.Before(allocations[j].Date)
+		}
+		return allocations[i].OrderID < allocations[j].OrderID
+	})
+
+	return calendarResponse{LineID: lineID, Month: month, Allocations: allocations}, nil
 }
 
 type productionConfirmRequest struct {
@@ -483,14 +587,51 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 			DueDate:  order.DueDate,
 		})
 	}
+	existingAllocations := []scheduler.ExistingAllocation{}
+	for _, allocation := range s.allocations {
+		existingAllocations = append(existingAllocations, scheduler.ExistingAllocation{
+			OrderID:  allocation.OrderID,
+			LineID:   allocation.LineID,
+			Date:     allocation.Date,
+			Quantity: allocation.Quantity,
+			Priority: allocation.Priority,
+			Locked:   allocation.Locked,
+		})
+	}
+
 	return scheduler.Plan(scheduler.Request{
-		LineID:         lineID,
-		CapacityPerDay: line.CapacityPerDay,
-		StartDate:      startDate,
-		Orders:         inputs,
-		ManualForce:    req.ManualForce,
-		ForceReason:    req.Reason,
+		LineID:              lineID,
+		CapacityPerDay:      line.CapacityPerDay,
+		StartDate:           startDate,
+		Orders:              inputs,
+		ExistingAllocations: existingAllocations,
+		ManualForce:         req.ManualForce,
+		ForceReason:         req.Reason,
 	})
+}
+
+func (s *MemoryStore) persistAllocationsLocked(allocations []scheduler.Allocation) {
+	for _, allocation := range allocations {
+		s.allocations = append(s.allocations, domain.ScheduleAllocation{
+			OrderID:  allocation.OrderID,
+			LineID:   allocation.LineID,
+			Date:     truncateDate(allocation.Date),
+			Quantity: allocation.Quantity,
+			Priority: allocation.Priority,
+			Locked:   allocation.Locked,
+		})
+		order, ok := s.orders[allocation.OrderID]
+		if ok && order.Status == domain.StatusPending {
+			order.Status = domain.StatusScheduled
+			order.UpdatedAt = time.Now().UTC()
+			s.orders[order.ID] = order
+		}
+	}
+}
+
+func truncateDate(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 func (s *MemoryStore) auditLocked(actorID, action, resource, reason string) {
