@@ -5,7 +5,7 @@ api:
   replicaCount: 2
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-api
-    tag: latest
+    tag: v0.1.6
   jwtSecret: change-me-in-production
   env:
     demoSeedData: "true"
@@ -25,7 +25,7 @@ worker:
   replicaCount: 1
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-scheduler-worker
-    tag: latest
+    tag: v0.1.6
   resources:
     requests:
       cpu: 100m
@@ -38,7 +38,7 @@ web:
   replicaCount: 2
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-web
-    tag: latest
+    tag: v0.1.6
   resources:
     requests:
       cpu: 50m
