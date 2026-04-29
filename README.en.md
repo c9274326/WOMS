@@ -181,6 +181,14 @@ Required GitHub repository settings:
 
 Image tags include branch tags and short SHA. Production `latest` is reserved for the protected release/main flow.
 
+Branch workflow:
+
+- `main` must exist and be protected.
+- Development happens on `feat/xxxx-xxxx` branches.
+- Open a PR from `feat/...` to `main` to trigger the CI bot.
+- `docker-publish` runs only after code reaches `main`, `release/**`, or when manually triggered.
+- Do not enable Docker Hub publishing on feature branch pushes.
+
 ## Post-Implementation Verification
 
 Full verification steps:
