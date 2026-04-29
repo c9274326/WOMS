@@ -13,6 +13,7 @@ coverage.out
 
 # Docker and local volumes
 .docker/
+docker-compose.override.yml
 docker-data/
 volumes/
 

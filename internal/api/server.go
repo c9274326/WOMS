@@ -651,7 +651,7 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 		s.jobs[id] = job
 		return job, nil
 	}
-	if len(result.Conflicts) > 0 {
+	if len(result.Conflicts) > 0 && !canPersistConflicts(req, result.Conflicts) {
 		job.Status = domain.JobFailed
 		job.Message = "schedule conflicts require review"
 		job.UpdatedAt = time.Now().UTC()
@@ -666,6 +666,9 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 	s.persistAllocationsLocked(result.Allocations)
 	delete(s.previews, req.PreviewID)
 	s.auditLocked(claims.Subject, "schedule.job.create", id, req.Reason)
+	if req.ManualForce && len(result.Conflicts) > 0 {
+		s.auditLocked(claims.Subject, "schedule.job.manual_force", id, req.Reason)
+	}
 	return job, nil
 }
 
@@ -853,20 +856,22 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 			DueDate:  dueDate,
 		})
 	}
-	for _, order := range s.orders {
-		if order.LineID != lineID || order.Status != domain.StatusPending {
-			continue
+	if req.DraftOrder == nil {
+		for _, order := range s.orders {
+			if order.LineID != lineID || order.Status != domain.StatusPending {
+				continue
+			}
+			if len(selected) > 0 && !selected[order.ID] {
+				continue
+			}
+			inputs = append(inputs, scheduler.OrderInput{
+				ID:       order.ID,
+				LineID:   order.LineID,
+				Quantity: order.Quantity,
+				Priority: order.Priority,
+				DueDate:  order.DueDate,
+			})
 		}
-		if len(selected) > 0 && !selected[order.ID] {
-			continue
-		}
-		inputs = append(inputs, scheduler.OrderInput{
-			ID:       order.ID,
-			LineID:   order.LineID,
-			Quantity: order.Quantity,
-			Priority: order.Priority,
-			DueDate:  order.DueDate,
-		})
 	}
 	existingAllocations := []scheduler.ExistingAllocation{}
 	for _, allocation := range s.allocations {
@@ -889,6 +894,18 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 		ManualForce:         req.ManualForce,
 		ForceReason:         req.Reason,
 	})
+}
+
+func canPersistConflicts(req scheduleRequest, conflicts []scheduler.Conflict) bool {
+	if !req.ManualForce || strings.TrimSpace(req.Reason) == "" {
+		return false
+	}
+	for _, conflict := range conflicts {
+		if conflict.Reason != "existing allocations require manual review or reschedule" {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *MemoryStore) persistAllocationsLocked(allocations []scheduler.Allocation) {

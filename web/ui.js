@@ -9,10 +9,17 @@ export function matchesOrder(order, query) {
 export function exactFilterOrders(orders, filters) {
   return orders.filter((order) => {
     return matchesSet(order.customer, filters.customers)
-      && matchesSet(order.lineId, filters.lines)
       && matchesStatus(order.status, filters.status)
       && matchesSet(order.priority, filters.priorities);
   });
+}
+
+export function defaultLine(lines) {
+  return [...lines].sort()[0] ?? "";
+}
+
+export function lineScopedOrders(orders, lineId) {
+  return orders.filter((order) => order.lineId === lineId);
 }
 
 export function uniqueValues(items, key) {

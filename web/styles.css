@@ -26,6 +26,23 @@ body {
   color: var(--ink);
 }
 
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 28px;
+  padding: 24px;
+}
+
+.login-page > div,
+.login-page .login-bar {
+  width: min(420px, calc(100vw - 48px));
+}
+
+.login-page h1 {
+  font-size: 42px;
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -69,7 +86,7 @@ h2 {
 }
 
 .login-bar {
-  grid-template-columns: 150px 150px auto;
+  grid-template-columns: 1fr;
   align-items: end;
 }
 
@@ -145,7 +162,7 @@ h3 {
 
 .filter-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
   gap: 12px;
 }
 
@@ -190,7 +207,7 @@ legend {
 }
 
 .grid-form {
-  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
   align-items: end;
   margin-bottom: 18px;
 }
@@ -494,6 +511,11 @@ tbody tr:hover {
   background: #ffffff;
   color: var(--muted);
   font-size: 13px;
+}
+
+.conflict-ack {
+  margin-top: 6px;
+  color: var(--danger);
 }
 
 .preview-page {
