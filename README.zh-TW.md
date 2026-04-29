@@ -181,6 +181,14 @@ GitHub repository 需設定：
 
 Image tag 包含 branch tag、short SHA；正式 `latest` 僅保留給受保護 release/main 流程。
 
+分支流程：
+
+- `main` 必須存在並啟用保護。
+- 開發都在 `feat/xxxx-xxxx` 分支進行。
+- 從 `feat/...` 開 PR 到 `main` 以觸發 CI bot。
+- `docker-publish` 只在程式進入 `main`、`release/**` 或手動觸發時執行。
+- 不要在 feature branch push 時啟用 Docker Hub publishing。
+
 ## 實作後驗證
 
 完整驗證步驟請看：
