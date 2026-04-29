@@ -89,6 +89,13 @@ Important settings:
 - `KAFKA_SCHEDULE_TOPIC`: schedule job topic.
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
 
+GitHub Actions Docker Hub settings:
+
+- Repository secret `DOCKERHUB_TOKEN`: Docker Hub Personal Access Token with Read & Write permission.
+- Repository variable `DOCKERHUB_USERNAME`: Docker Hub username.
+- Repository variable `DOCKERHUB_NAMESPACE`: Docker Hub username or organization namespace.
+- Use repository-level Actions settings. Environment-level settings are not required because workflows do not declare `environment:`.
+
 Demo accounts:
 
 - Sales: `sales` / `demo`
@@ -124,6 +131,14 @@ Default services:
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 - Kafka: `localhost:9092`
+
+Frontend behavior:
+
+- Login is stored in browser `localStorage`, so refresh keeps the current session until the JWT expires or is rejected.
+- Exact filters support customer, production line, status, and priority. Multiple values in one field are OR; different fields are AND.
+- The status sidebar shows the four WOMS statuses and toggles exact status filters.
+- Schedule preview displays allocation cards without saving them.
+- Creating a schedule job saves allocations in the in-memory API store and renders them in the monthly schedule calendar by actual scheduled date.
 
 Persistence note:
 

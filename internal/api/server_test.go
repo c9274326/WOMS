@@ -113,6 +113,89 @@ func TestSchedulerCannotReadAnotherLineJob(t *testing.T) {
 	}
 }
 
+func TestScheduleJobPersistsAllocationsAndCalendar(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	jobID := createScheduleJob(t, server, schedulerA, "A")
+	if jobID == "" {
+		t.Fatal("expected schedule job id")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-05", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []struct {
+			OrderID string `json:"orderId"`
+			Status  string `json:"status"`
+		} `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode calendar response: %v", err)
+	}
+	if len(payload.Allocations) != 1 {
+		t.Fatalf("expected one allocation, got %+v", payload.Allocations)
+	}
+	if payload.Allocations[0].Status != string("已排程") {
+		t.Fatalf("expected scheduled status, got %+v", payload.Allocations[0])
+	}
+}
+
+func TestScheduleCalendarExcludesOtherMonths(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-06", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []any `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode calendar response: %v", err)
+	}
+	if len(payload.Allocations) != 0 {
+		t.Fatalf("expected no allocations in other month, got %+v", payload.Allocations)
+	}
+}
+
+func TestSchedulerCannotReadAnotherLineCalendar(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "B")
+	schedulerB := login(t, server, "scheduler-b", "demo")
+	createScheduleJob(t, server, schedulerB, "B")
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	req := httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=B&month=2026-05", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func login(t *testing.T, server *Server, username, password string) string {
 	t.Helper()
 	body := bytes.NewBufferString(`{"username":"` + username + `","password":"` + password + `"}`)

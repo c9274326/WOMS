@@ -69,7 +69,7 @@ h2 {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: 220px minmax(0, 1fr) 360px;
   gap: 20px;
   padding: 24px clamp(18px, 4vw, 48px);
 }
@@ -97,6 +97,62 @@ h2 {
 
 .search-box {
   width: min(260px, 38vw);
+}
+
+.filter-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: #fbfdfd;
+}
+
+h3 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 12px;
+}
+
+fieldset {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+legend {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.check-list {
+  display: grid;
+  gap: 6px;
+}
+
+.check-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.check-option input {
+  width: 16px;
+  min-height: 16px;
 }
 
 .grid-form {
@@ -246,6 +302,148 @@ tbody tr:hover {
   font-weight: 700;
 }
 
+.status-panel {
+  align-self: start;
+  position: sticky;
+  top: 16px;
+}
+
+.status-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.status-filter-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.status-filter-button.active {
+  border-color: var(--accent);
+  background: #e0f2f1;
+}
+
+.status-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar-section {
+  margin-top: 20px;
+}
+
+.compact-heading {
+  margin-bottom: 12px;
+}
+
+.calendar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-controls strong {
+  min-width: 90px;
+  text-align: center;
+}
+
+.calendar-controls button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.calendar-weekdays,
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(96px, 1fr));
+}
+
+.calendar-weekdays {
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  overflow: hidden;
+}
+
+.calendar-weekdays span {
+  padding: 8px;
+  background: #f8fbfb;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.calendar-grid {
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.calendar-day {
+  min-height: 118px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 8px;
+  background: #ffffff;
+}
+
+.calendar-day.outside {
+  background: #f8fbfb;
+  color: var(--muted);
+}
+
+.calendar-day-number {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.calendar-item,
+.preview-item {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 6px;
+  border-radius: 6px;
+  padding: 6px;
+  background: #eef8f7;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.calendar-item.high,
+.preview-item.high {
+  background: #fff0ef;
+}
+
+.preview-panel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.preview-list {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .output {
   min-height: 220px;
   margin: 0;
@@ -283,5 +481,19 @@ tbody tr:hover {
 
   .search-box {
     width: 100%;
+  }
+
+  .filter-grid,
+  .calendar-weekdays,
+  .calendar-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .status-panel {
+    position: static;
+  }
+
+  .calendar-weekdays {
+    display: none;
   }
 }
