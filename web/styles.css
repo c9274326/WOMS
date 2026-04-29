@@ -254,6 +254,16 @@ button:hover {
   background: var(--accent-dark);
 }
 
+.secondary-button {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.secondary-button:hover {
+  background: #f8fbfb;
+}
+
 .danger-button {
   background: var(--danger);
 }
@@ -474,6 +484,40 @@ tbody tr:hover {
   font-weight: 800;
 }
 
+.waterline {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 7px;
+}
+
+.waterline-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.waterline-meta strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.waterline-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eef0;
+}
+
+.waterline-track span {
+  display: block;
+  max-width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+
 .calendar-item,
 .preview-item {
   display: grid;
@@ -518,6 +562,28 @@ tbody tr:hover {
   color: var(--danger);
 }
 
+.conflict-actions {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  border: 1px solid #fedf89;
+  border-radius: var(--radius);
+  padding: 12px;
+  background: #fff8eb;
+  color: var(--ink);
+}
+
+.conflict-actions h3 {
+  color: #8a6116;
+}
+
+.conflict-note {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .preview-page {
   min-height: calc(100vh - 1px);
   padding: 24px clamp(18px, 4vw, 48px);
@@ -545,6 +611,10 @@ tbody tr:hover {
   border-radius: var(--radius);
   padding: 18px;
   background: var(--panel);
+}
+
+.preview-page-grid .preview-list {
+  max-height: calc(100vh - 220px);
 }
 
 .message-dialog {

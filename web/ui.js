@@ -22,6 +22,28 @@ export function lineScopedOrders(orders, lineId) {
   return orders.filter((order) => order.lineId === lineId);
 }
 
+export function waterlineMetrics(allocations, capacity = 10000) {
+  const total = allocations.reduce((sum, allocation) => sum + Number(allocation.quantity ?? 0), 0);
+  const ratio = capacity > 0 ? Math.min(total / capacity, 1) : 0;
+  return {
+    total,
+    capacity,
+    ratio,
+    percent: Math.round(ratio * 100),
+    color: waterlineColor(ratio),
+  };
+}
+
+export function conflictExplanation(conflict) {
+  if (conflict.reason === "capacity cannot satisfy order before due date") {
+    return "這張訂單在目前開始日期與交期之間沒有足夠產能。需要提前開始、延後交期、拆單，或調整訂單數量。";
+  }
+  if (conflict.reason === "existing allocations require manual review or reschedule") {
+    return "這次試排會碰到既有排程。若客戶或高優先級需求已核准，可以填寫原因後用人工強制介入重新試排。";
+  }
+  return "這筆衝突需要排程工程師檢查產能、交期與受影響訂單後再處理。";
+}
+
 export function uniqueValues(items, key) {
   return Array.from(new Set(items.map((item) => item[key]).filter(Boolean))).sort();
 }
@@ -101,4 +123,16 @@ function matchesSet(value, selected) {
 
 function matchesStatus(value, selected) {
   return !selected || String(value) === selected;
+}
+
+function waterlineColor(ratio) {
+  const clamped = Math.max(0, Math.min(ratio, 1));
+  if (clamped < 0.8) {
+    const progress = clamped / 0.8;
+    const hue = Math.round(210 - progress * 178);
+    return `hsl(${hue} 88% 48%)`;
+  }
+  const progress = (clamped - 0.8) / 0.2;
+  const hue = Math.round(32 - progress * 32);
+  return `hsl(${hue} 88% 48%)`;
 }
