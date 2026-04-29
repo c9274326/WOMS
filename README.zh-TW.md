@@ -88,6 +88,7 @@ cp .env.example .env
 - `KAFKA_BROKERS`: Kafka broker 清單。
 - `KAFKA_SCHEDULE_TOPIC`: 排程任務 topic。
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace。
+- `WOMS_IMAGE_TAG`: Docker Compose 使用的 image tag。預設為 `latest`，讓 Compose build 與本機啟動時使用的 tag 與 Docker Hub `latest` 保持一致。
 
 GitHub Actions Docker Hub 設定：
 
@@ -135,13 +136,14 @@ docker compose up --build
 
 前端行為：
 
+- 未登入時會先進入獨立登入頁；有效 session 存在前不會顯示內部頁面。
 - 登入狀態會存在瀏覽器 `localStorage`，重新整理後會保留 session，直到 JWT 過期或被 API 拒絕。
-- 登入後會隱藏帳號密碼欄位，頁首顯示目前帳號與登出按鈕。
 - admin 可在 Admin panel 指派帳號角色與 scheduler 所屬產線；非 admin 呼叫會回 `403`。
-- 精準篩選支援客戶、產線、狀態、優先級。客戶/產線/優先級可同欄位多選 OR；狀態改為單選。
-- 試排結果會開啟確認頁面，並在日曆高亮 preview allocations；preview 不會寫入正式資料。
-- sales 會先預覽草稿訂單，再確認是否放到待排程訂單。
-- scheduler 必須先預覽已選取的待排程訂單，再從 preview 頁面確認執行；缺少 `previewId` 的直接排程 API 會被拒絕。
+- 目前產線選擇器對 sales/admin 預設為字典序最低的產線，scheduler 則鎖定在所屬產線。
+- 精準篩選支援客戶與優先級。客戶改為選單式篩選，訂單狀態由左側狀態面板控制。
+- 訂單狀態數字只統計目前選定產線。
+- sales 只能加入客戶訂單到待排程；草稿可行性會與既有已排程配置檢查，不會把其他待排程訂單一起試算。
+- scheduler 必須先預覽已選取的待排程訂單，再從 preview 頁面確認執行。人工介入必須填寫原因並逐項確認衝突清單後才會接受任務；缺少 `previewId` 的直接排程 API 會被拒絕。
 - 權限不足、操作錯誤與操作結果會以彈出訊息視窗顯示。
 - `scheduler-a` demo 訂單 `ORD-2` 已補上 demo allocation，因此會顯示在月曆。
 - 衝突測試按鈕會建立多張同日大量訂單，方便在 preview 看到衝突報告。

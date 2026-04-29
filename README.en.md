@@ -88,6 +88,7 @@ Important settings:
 - `KAFKA_BROKERS`: Kafka broker list.
 - `KAFKA_SCHEDULE_TOPIC`: schedule job topic.
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
+- `WOMS_IMAGE_TAG`: Docker image tag used by Docker Compose. Defaults to `latest` so Compose builds and local runs stay aligned with the Docker Hub `latest` tag.
 
 GitHub Actions Docker Hub settings:
 
@@ -135,13 +136,14 @@ Default services:
 
 Frontend behavior:
 
+- Users land on a dedicated login page until a valid session exists; internal pages are hidden before login.
 - Login is stored in browser `localStorage`, so refresh keeps the current session until the JWT expires or is rejected.
-- After login, the username/password form is hidden and the header shows the current account with a logout action.
 - Admin users can assign account roles and scheduler production lines from the Admin panel. Non-admin users receive `403`.
-- Exact filters support customer, production line, status, and priority. Customer/line/priority allow multi-select OR inside the field; status is single-select.
-- Schedule preview opens a confirmation page, highlights preview allocations on the calendar, and does not persist changes.
-- Sales users preview a draft order first, then confirm whether to put it into pending orders.
-- Scheduler users must preview selected pending orders first, then confirm execution from the preview page. Direct schedule-job creation without `previewId` is rejected.
+- The active production line selector defaults to the lexicographically lowest line for sales/admin users and locks to the assigned line for scheduler users.
+- Exact filters support customer and priority. Customer filtering uses a menu, while order status is controlled by the left status panel.
+- Status counts are scoped to the active production line.
+- Sales users can add customer orders to pending scheduling only; draft feasibility is checked against existing scheduled allocations, not all other pending orders.
+- Scheduler users must preview selected pending orders first, then confirm execution from the preview page. Manual intervention requires a reason and explicit conflict acknowledgements before the job is accepted. Direct schedule-job creation without `previewId` is rejected.
 - Popup dialogs are used for warnings, permission failures, and operation results.
 - `scheduler-a` demo order `ORD-2` now has a persisted demo allocation, so it appears on the monthly calendar.
 - The conflict demo button creates several same-day orders so the preview can show a conflict report.

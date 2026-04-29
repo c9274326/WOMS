@@ -32,6 +32,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
   api:
+    image: docker.io/${DOCKERHUB_NAMESPACE:-your-dockerhub-namespace}/woms-api:${WOMS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -50,6 +51,7 @@ services:
       - "8080:8080"
 
   scheduler-worker:
+    image: docker.io/${DOCKERHUB_NAMESPACE:-your-dockerhub-namespace}/woms-scheduler-worker:${WOMS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -62,6 +64,7 @@ services:
       - kafka
 
   web:
+    image: docker.io/${DOCKERHUB_NAMESPACE:-your-dockerhub-namespace}/woms-web:${WOMS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.web

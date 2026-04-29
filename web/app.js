@@ -1,7 +1,9 @@
 import {
+  defaultLine,
   escapeHtml,
   exactFilterOrders,
   groupAllocationsByDate,
+  lineScopedOrders,
   monthGrid,
   priorityClass,
   priorityLabel,
@@ -22,9 +24,9 @@ const state = {
   calendarAllocations: [],
   preview: null,
   selectedOrderIds: new Set(),
+  selectedLine: localStorage.getItem("woms.selectedLine") || defaultLine(lines),
   filters: {
     customers: new Set(),
-    lines: new Set(),
     status: "",
     priorities: new Set(),
   },
@@ -46,6 +48,7 @@ document.getElementById("login-form").addEventListener("submit", async (event) =
       body: JSON.stringify(data),
     }, false);
     saveSession(payload.token, payload.user);
+    configureLineForUser();
     showMessage("登入成功", `您好 ${payload.user.username}`);
     await refreshWorkspace();
   } catch (error) {
@@ -60,18 +63,28 @@ document.getElementById("logout-button").addEventListener("click", () => {
   showMessage("已登出", "你已回到未登入狀態");
 });
 
+document.getElementById("active-line-select").addEventListener("change", async (event) => {
+  state.selectedLine = event.currentTarget.value;
+  localStorage.setItem("woms.selectedLine", state.selectedLine);
+  state.selectedOrderIds.clear();
+  state.filters.customers.clear();
+  syncLineInputs();
+  renderWorkspace();
+  await loadCalendar();
+});
+
 document.getElementById("order-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     const draftOrder = orderFormData();
     const result = await createPreview({
-      lineId: draftOrder.lineId,
-      startDate: document.querySelector('#schedule-form input[name="startDate"]').value,
+      lineId: activeLine(),
+      startDate: draftOrder.dueDate,
       draftOrder,
     }, "sales-draft");
     openPreviewPage(result);
   } catch (error) {
-    showMessage("無法預覽新訂單", error.message, "warn");
+    showMessage("無法加入待排程", error.message, "warn");
   }
 });
 
@@ -90,8 +103,6 @@ document.getElementById("assign-user-form").addEventListener("submit", async (ev
   }
 });
 
-document.getElementById("refresh-orders").addEventListener("click", refreshWorkspace);
-
 document.getElementById("preview-selected").addEventListener("click", async () => {
   if (state.selectedOrderIds.size === 0) {
     showMessage("請先選取訂單", "至少選取一張待排程訂單再進行試排。", "warn");
@@ -99,7 +110,6 @@ document.getElementById("preview-selected").addEventListener("click", async () =
   }
   try {
     const data = scheduleFormData();
-    data.orderIds = Array.from(state.selectedOrderIds);
     const result = await createPreview(data, "schedule");
     openPreviewPage(result);
   } catch (error) {
@@ -131,13 +141,12 @@ document.getElementById("delete-selected").addEventListener("click", async () =>
 
 document.getElementById("schedule-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (state.user?.role === "scheduler" && state.selectedOrderIds.size === 0) {
+  if (state.selectedOrderIds.size === 0) {
     showMessage("請先選取訂單", "排程工程師必須先選取待排程訂單，才能進入試排確認流程。", "warn");
     return;
   }
   try {
     const data = scheduleFormData();
-    data.orderIds = Array.from(state.selectedOrderIds);
     const result = await createPreview(data, "schedule");
     openPreviewPage(result);
   } catch (error) {
@@ -184,8 +193,18 @@ document.getElementById("confirm-schedule-job").addEventListener("click", async 
   if (!state.preview?.previewId) {
     return;
   }
-  if ((state.preview.conflicts ?? []).length > 0) {
-    showMessage("仍有衝突", "請先檢查衝突清單；若要強制介入，請填寫原因並重新試排。", "warn");
+  const conflicts = state.preview.conflicts ?? [];
+  const manualForce = state.preview.request.manualForce;
+  if (conflicts.length > 0 && !manualForce) {
+    showMessage("仍有衝突", "請勾選人工強制介入、填寫原因並重新試排。", "warn");
+    return;
+  }
+  if (manualForce && !conflictsCanBeManuallyForced(conflicts)) {
+    showMessage("無法人工介入", "容量無法在交期前排完的衝突不能強制送出，請調整開始日期、交期或拆單。", "warn");
+    return;
+  }
+  if (manualForce && !allConflictAcknowledgementsChecked()) {
+    showMessage("請確認衝突清單", "人工介入前必須逐項確認衝突與受影響訂單。", "warn");
     return;
   }
   try {
@@ -222,8 +241,7 @@ document.getElementById("today-month").addEventListener("click", async () => {
   await loadCalendar();
 });
 
-document.querySelector('#schedule-form select[name="lineId"]').addEventListener("change", loadCalendar);
-
+configureLineForUser();
 renderAuthState();
 if (state.token) {
   refreshWorkspace().catch((error) => {
@@ -245,6 +263,7 @@ async function refreshWorkspace() {
 }
 
 function renderWorkspace() {
+  syncLineInputs();
   renderFilters();
   renderStatusSidebar();
   renderOrders();
@@ -255,7 +274,7 @@ function renderWorkspace() {
 async function loadOrders() {
   const payload = await request("/api/orders");
   state.orders = payload.orders ?? [];
-  state.selectedOrderIds = new Set(Array.from(state.selectedOrderIds).filter((id) => state.orders.some((order) => order.id === id)));
+  state.selectedOrderIds = new Set(Array.from(state.selectedOrderIds).filter((id) => selectableOrders().some((order) => order.id === id)));
   renderFilters();
   renderStatusSidebar();
   renderOrders();
@@ -273,7 +292,7 @@ async function loadCalendar() {
     renderCalendar();
     return;
   }
-  const lineId = document.querySelector('#schedule-form select[name="lineId"]').value;
+  const lineId = activeLine();
   const month = monthKey(state.calendarDate);
   const payload = await request(`/api/schedules/calendar?lineId=${encodeURIComponent(lineId)}&month=${encodeURIComponent(month)}`);
   state.calendarAllocations = payload.allocations ?? [];
@@ -303,11 +322,20 @@ async function createPreview(requestData, kind) {
 
 function renderAuthState() {
   const loggedIn = Boolean(state.token && state.user);
-  document.getElementById("login-form").hidden = loggedIn;
-  document.getElementById("session-bar").hidden = !loggedIn;
+  document.getElementById("login-page").hidden = loggedIn;
+  document.getElementById("app-shell").hidden = !loggedIn;
   document.getElementById("admin-panel").hidden = state.user?.role !== "admin";
+  document.getElementById("order-form").hidden = state.user?.role !== "sales";
+  document.getElementById("scheduler-panel").hidden = state.user?.role !== "scheduler";
+  document.getElementById("batch-bar").hidden = state.user?.role !== "scheduler";
+  document.querySelectorAll(".scheduler-only").forEach((node) => {
+    node.hidden = state.user?.role !== "scheduler";
+  });
+  document.getElementById("active-line-select").disabled = state.user?.role === "scheduler";
   if (loggedIn) {
     document.getElementById("session-greeting").textContent = `您好 ${state.user.username}`;
+  } else {
+    closePreviewPage();
   }
 }
 
@@ -319,13 +347,14 @@ function renderUsers() {
 }
 
 function renderOrders() {
-  const filtered = exactFilterOrders(state.orders, state.filters);
+  const filtered = exactFilterOrders(visibleLineOrders(), state.filters);
   const body = document.getElementById("orders-body");
+  const showSelection = state.user?.role === "scheduler";
   body.innerHTML = "";
   for (const order of filtered) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td class="select-cell"><input type="checkbox" data-order-id="${escapeHtml(order.id)}" ${state.selectedOrderIds.has(order.id) ? "checked" : ""}></td>
+      <td class="select-cell scheduler-only" ${showSelection ? "" : "hidden"}><input type="checkbox" data-order-id="${escapeHtml(order.id)}" ${state.selectedOrderIds.has(order.id) ? "checked" : ""} ${order.status === "待排程" ? "" : "disabled"}></td>
       <td>${escapeHtml(order.id)}</td>
       <td>${escapeHtml(order.customer)}</td>
       <td>${escapeHtml(order.lineId)}</td>
@@ -350,10 +379,30 @@ function renderOrders() {
 }
 
 function renderFilters() {
-  renderCheckboxGroup("customer-filters", uniqueValues(state.orders, "customer"), state.filters.customers, valueLabel);
-  renderCheckboxGroup("line-filters", lines, state.filters.lines, valueLabel);
-  renderStatusRadios();
+  renderCustomerSelect();
   renderCheckboxGroup("priority-filters", priorities, state.filters.priorities, priorityLabel);
+}
+
+function renderCustomerSelect() {
+  const select = document.getElementById("customer-filter");
+  const current = Array.from(state.filters.customers)[0] ?? "";
+  const customers = uniqueValues(visibleLineOrders(), "customer");
+  const nextCurrent = current && customers.includes(current) ? current : "";
+  if (nextCurrent !== current) {
+    state.filters.customers.clear();
+  }
+  select.innerHTML = [
+    `<option value="">全部客戶</option>`,
+    ...customers.map((customer) => `<option value="${escapeHtml(customer)}" ${customer === nextCurrent ? "selected" : ""}>${escapeHtml(customer)}</option>`),
+  ].join("");
+  select.value = nextCurrent;
+  select.onchange = () => {
+    state.filters.customers.clear();
+    if (select.value) {
+      state.filters.customers.add(select.value);
+    }
+    renderOrders();
+  };
 }
 
 function renderCheckboxGroup(containerId, values, selected, labelFor) {
@@ -379,29 +428,8 @@ function renderCheckboxGroup(containerId, values, selected, labelFor) {
   }
 }
 
-function renderStatusRadios() {
-  const container = document.getElementById("status-filters");
-  container.innerHTML = "";
-  const values = ["", ...statuses];
-  for (const value of values) {
-    const id = `status-filter-${value || "all"}`;
-    const label = document.createElement("label");
-    label.className = "check-option";
-    label.innerHTML = `
-      <input type="radio" name="status-filter" id="${escapeHtml(id)}" value="${escapeHtml(value)}" ${state.filters.status === value ? "checked" : ""}>
-      <span>${escapeHtml(value || "全部")}</span>
-    `;
-    label.querySelector("input").addEventListener("change", () => {
-      state.filters.status = value;
-      renderStatusSidebar();
-      renderOrders();
-    });
-    container.appendChild(label);
-  }
-}
-
 function renderStatusSidebar() {
-  const counts = statusCounts(state.orders);
+  const counts = statusCounts(visibleLineOrders());
   const container = document.getElementById("status-sidebar");
   container.innerHTML = "";
   for (const status of statuses) {
@@ -414,7 +442,6 @@ function renderStatusSidebar() {
     `;
     button.addEventListener("click", () => {
       state.filters.status = state.filters.status === status ? "" : status;
-      renderFilters();
       renderStatusSidebar();
       renderOrders();
     });
@@ -455,12 +482,12 @@ function renderPreviewSummary() {
   const allocations = state.preview.allocations ?? [];
   const conflicts = state.preview.conflicts ?? [];
   if (allocations.length === 0 && conflicts.length === 0) {
-    preview.textContent = "沒有可顯示的試排結果";
+    preview.textContent = "沒有可顯示的結果";
     return;
   }
   preview.innerHTML = [
-    `<div class="preview-item"><strong>${escapeHtml(state.preview.previewId)}</strong><span>點開試排頁查看日曆高亮與確認動作</span></div>`,
-    ...conflicts.map(renderConflictItem),
+    `<div class="preview-item"><strong>${escapeHtml(state.preview.previewId)}</strong><span>點開確認頁查看日曆高亮與確認動作</span></div>`,
+    ...conflicts.map((conflict) => renderConflictItem(conflict)),
   ].join("");
 }
 
@@ -476,15 +503,19 @@ function openPreviewPage(preview) {
 
 function closePreviewPage() {
   document.getElementById("preview-page").hidden = true;
-  document.querySelector("main.layout").hidden = false;
+  const layout = document.querySelector("main.layout");
+  if (layout) {
+    layout.hidden = false;
+  }
 }
 
 function renderPreviewPage() {
   const pageList = document.getElementById("preview-page-list");
   const allocations = state.preview?.allocations ?? [];
   const conflicts = state.preview?.conflicts ?? [];
+  const manualForce = state.preview?.request?.manualForce ?? false;
   pageList.innerHTML = [
-    ...conflicts.map(renderConflictItem),
+    ...conflicts.map((conflict, index) => renderConflictItem(conflict, index, manualForce)),
     ...allocations.map((allocation) => `
       <div class="preview-item ${priorityClass(allocation.priority)}">
         <strong>${escapeHtml(allocation.orderId)}</strong>
@@ -492,7 +523,7 @@ function renderPreviewPage() {
         <span>${priorityLabel(allocation.priority)}</span>
       </div>
     `),
-  ].join("") || "沒有可顯示的試排結果";
+  ].join("") || "沒有可顯示的結果";
 
   document.getElementById("confirm-preview-order").hidden = state.preview?.kind !== "sales-draft";
   document.getElementById("confirm-schedule-job").hidden = state.preview?.kind !== "schedule" || state.user?.role !== "scheduler";
@@ -518,13 +549,21 @@ function renderPreviewPage() {
   }
 }
 
-function renderConflictItem(conflict) {
+function renderConflictItem(conflict, index = 0, withAcknowledgement = false) {
   const affected = conflict.affectedOrderIds?.length ? `影響：${conflict.affectedOrderIds.join(", ")}` : "無已知受影響訂單";
+  const canAcknowledge = withAcknowledgement && conflict.reason === "existing allocations require manual review or reschedule";
+  const acknowledgement = canAcknowledge ? `
+    <label class="check-option conflict-ack">
+      <input type="checkbox" data-conflict-ack="${index}">
+      <span>確認以人工介入處理此衝突</span>
+    </label>
+  ` : "";
   return `
     <div class="preview-item high">
       <strong>${escapeHtml(conflict.orderId)}</strong>
       <span>${escapeHtml(conflict.reason)}</span>
       <span>最早完成：${dateOnly(conflict.earliestFinishDate)} · ${escapeHtml(affected)}</span>
+      ${acknowledgement}
     </div>
   `;
 }
@@ -545,13 +584,16 @@ function updateSelectedCount() {
 
 function scheduleFormData() {
   const data = Object.fromEntries(new FormData(document.getElementById("schedule-form")));
+  data.lineId = activeLine();
   data.manualForce = data.manualForce === "on";
   data.orderIds = Array.from(state.selectedOrderIds);
   return data;
 }
 
 function orderFormData() {
+  syncLineInputs();
   const data = Object.fromEntries(new FormData(document.getElementById("order-form")));
+  data.lineId = activeLine();
   data.quantity = Number(data.quantity);
   return data;
 }
@@ -582,6 +624,10 @@ async function request(path, options = {}, needsAuth = true) {
 function saveSession(token, user) {
   state.token = token;
   state.user = user;
+  if (user.role !== "scheduler") {
+    state.selectedLine = defaultLine(lines);
+    localStorage.setItem("woms.selectedLine", state.selectedLine);
+  }
   localStorage.setItem("woms.token", token);
   localStorage.setItem("woms.user", JSON.stringify(user));
   renderAuthState();
@@ -616,6 +662,51 @@ function showMessage(title, body, type = "info", details = "") {
   }
 }
 
+function configureLineForUser() {
+  if (state.user?.role === "scheduler" && state.user.lineId) {
+    state.selectedLine = state.user.lineId;
+  }
+  if (state.user?.role === "sales" && !state.filters.status) {
+    state.filters.status = "待排程";
+  }
+  if (!lines.includes(state.selectedLine)) {
+    state.selectedLine = defaultLine(lines);
+  }
+  syncLineInputs();
+}
+
+function syncLineInputs() {
+  const line = activeLine();
+  const activeSelect = document.getElementById("active-line-select");
+  activeSelect.value = line;
+  document.querySelector('#order-form input[name="lineId"]').value = line;
+  document.querySelector('#schedule-form input[name="lineId"]').value = line;
+}
+
+function activeLine() {
+  if (state.user?.role === "scheduler" && state.user.lineId) {
+    return state.user.lineId;
+  }
+  return state.selectedLine || defaultLine(lines);
+}
+
+function visibleLineOrders() {
+  return lineScopedOrders(state.orders, activeLine());
+}
+
+function selectableOrders() {
+  return visibleLineOrders().filter((order) => order.status === "待排程");
+}
+
+function allConflictAcknowledgementsChecked() {
+  const boxes = Array.from(document.querySelectorAll("[data-conflict-ack]"));
+  return boxes.length === 0 || boxes.every((box) => box.checked);
+}
+
+function conflictsCanBeManuallyForced(conflicts) {
+  return conflicts.every((conflict) => conflict.reason === "existing allocations require manual review or reschedule");
+}
+
 function firstPreviewDate(allocations) {
   if (!allocations.length) {
     return null;
@@ -629,8 +720,4 @@ function dateOnly(value) {
 
 function monthKey(value) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function valueLabel(value) {
-  return value;
 }

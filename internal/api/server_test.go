@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/c9274326/woms/internal/domain"
 )
 
 func TestIngressAuthRejectsMissingToken(t *testing.T) {
@@ -266,6 +268,93 @@ func TestSalesConfirmsDraftPreviewIntoPendingOrder(t *testing.T) {
 	}
 }
 
+func TestSalesDraftPreviewDoesNotScheduleOtherPendingOrders(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []struct {
+			OrderID string `json:"orderId"`
+		} `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if len(payload.Allocations) == 0 {
+		t.Fatal("expected draft allocation")
+	}
+	for _, allocation := range payload.Allocations {
+		if allocation.OrderID != "PREVIEW-DRAFT" {
+			t.Fatalf("draft preview should not include existing pending orders, got %+v", payload.Allocations)
+		}
+	}
+}
+
+func TestManualForceConflictCanCreateScheduleJobWithAudit(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrderWithPriority(t, server, salesToken, "A", "low")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+	createOrderWithPriority(t, server, salesToken, "A", "high")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("manual preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var preview struct {
+		PreviewID string `json:"previewId"`
+		Conflicts []struct {
+			AffectedOrderIDs []string `json:"affectedOrderIds"`
+		} `json:"conflicts"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if len(preview.Conflicts) == 0 || len(preview.Conflicts[0].AffectedOrderIDs) == 0 {
+		t.Fatalf("expected manual conflict with affected orders, got %+v", preview.Conflicts)
+	}
+
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved","previewId":"` + preview.PreviewID + `"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("manual job failed: %d %s", res.Code, res.Body.String())
+	}
+	var job domain.ScheduleJob
+	if err := json.Unmarshal(res.Body.Bytes(), &job); err != nil {
+		t.Fatalf("decode job response: %v", err)
+	}
+	if job.Status != domain.JobCompleted {
+		t.Fatalf("expected completed manual job, got %+v", job)
+	}
+	foundAudit := false
+	for _, audit := range store.audits {
+		if audit.Action == "schedule.job.manual_force" && audit.Reason == "customer escalation approved" {
+			foundAudit = true
+		}
+	}
+	if !foundAudit {
+		t.Fatalf("expected manual force audit, got %+v", store.audits)
+	}
+}
+
 func TestDeleteOrdersRemovesScheduledAllocation(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
@@ -320,7 +409,12 @@ func login(t *testing.T, server *Server, username, password string) string {
 
 func createOrder(t *testing.T, server *Server, token, lineID string) {
 	t.Helper()
-	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"` + lineID + `","quantity":2500,"priority":"low","dueDate":"2026-05-03"}`)
+	createOrderWithPriority(t, server, token, lineID, "low")
+}
+
+func createOrderWithPriority(t *testing.T, server *Server, token, lineID, priority string) {
+	t.Helper()
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"` + lineID + `","quantity":2500,"priority":"` + priority + `","dueDate":"2026-05-03"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res := httptest.NewRecorder()

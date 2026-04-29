@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  defaultLine,
   escapeHtml,
   exactFilterOrders,
   groupAllocationsByDate,
+  lineScopedOrders,
   matchesOrder,
   monthGrid,
   priorityLabel,
@@ -73,6 +75,26 @@ test("uniqueValues and statusCounts provide sidebar/filter data", () => {
   assert.deepEqual(uniqueValues(orders, "customer"), ["ACME", "Orion"]);
   assert.deepEqual(statusCounts(orders), {
     "待排程": 2,
+    "已排程": 0,
+    "生產中": 0,
+    "已完成": 1,
+  });
+});
+
+test("defaultLine chooses the lexicographically lowest production line", () => {
+  assert.equal(defaultLine(["C", "A", "B"]), "A");
+});
+
+test("lineScopedOrders limits status counts and tables to the selected line", () => {
+  const orders = [
+    { id: "ORD-1", lineId: "A", status: "待排程" },
+    { id: "ORD-2", lineId: "B", status: "已排程" },
+    { id: "ORD-3", lineId: "A", status: "已完成" },
+  ];
+  const scoped = lineScopedOrders(orders, "A");
+  assert.deepEqual(scoped.map((item) => item.id), ["ORD-1", "ORD-3"]);
+  assert.deepEqual(statusCounts(scoped), {
+    "待排程": 1,
     "已排程": 0,
     "生產中": 0,
     "已完成": 1,
