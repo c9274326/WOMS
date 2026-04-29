@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WOMS</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Wafer Order Management System</p>
+        <h1>WOMS 排程工作台</h1>
+      </div>
+      <form id="login-form" class="login-bar">
+        <label>
+          <span>帳號</span>
+          <input name="username" value="sales" autocomplete="username">
+        </label>
+        <label>
+          <span>密碼</span>
+          <input name="password" value="demo" type="password" autocomplete="current-password">
+        </label>
+        <button type="submit">登入</button>
+      </form>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-main">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Orders</p>
+            <h2>訂單管理</h2>
+          </div>
+          <div class="toolbar">
+            <label class="search-box">
+              <span>查詢</span>
+              <input id="order-search" placeholder="訂單、客戶、產線">
+            </label>
+            <button id="refresh-orders" type="button">重新整理</button>
+          </div>
+        </div>
+
+        <form id="order-form" class="grid-form">
+          <label>
+            <span>客戶</span>
+            <input name="customer" value="ACME">
+          </label>
+          <label>
+            <span>產線</span>
+            <select name="lineId">
+              <option>A</option>
+              <option>B</option>
+              <option>C</option>
+              <option>D</option>
+            </select>
+          </label>
+          <label>
+            <span>數量</span>
+            <input name="quantity" type="number" min="25" max="2500" step="25" value="2500">
+          </label>
+          <label>
+            <span>優先級</span>
+            <select name="priority">
+              <option value="low">低</option>
+              <option value="high">高</option>
+            </select>
+          </label>
+          <label>
+            <span>交期</span>
+            <input name="dueDate" type="date">
+          </label>
+          <button type="submit">建立待排程訂單</button>
+        </form>
+
+        <div class="table-wrap">
+          <table>
+            <caption>待排程與生產訂單</caption>
+            <thead>
+              <tr>
+                <th class="select-cell">選取</th>
+                <th>訂單</th>
+                <th>客戶</th>
+                <th>產線</th>
+                <th class="numeric">數量</th>
+                <th>優先級</th>
+                <th>狀態</th>
+                <th>交期</th>
+              </tr>
+            </thead>
+            <tbody id="orders-body"></tbody>
+          </table>
+        </div>
+        <div class="batch-bar">
+          <span id="selected-count">已選取 0 張訂單</span>
+          <button id="preview-selected" type="button">試排選取訂單</button>
+        </div>
+      </section>
+
+      <aside class="panel side-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Scheduling</p>
+            <h2>試排與任務</h2>
+          </div>
+        </div>
+        <form id="schedule-form" class="stack-form">
+          <label>
+            <span>產線</span>
+            <select name="lineId">
+              <option>A</option>
+              <option>B</option>
+              <option>C</option>
+              <option>D</option>
+            </select>
+          </label>
+          <label>
+            <span>開始日期</span>
+            <input name="startDate" type="date">
+          </label>
+          <button name="action" value="preview" type="submit">試排程</button>
+          <button name="action" value="job" type="submit">建立排程任務</button>
+        </form>
+        <pre id="schedule-output" class="output">尚未執行</pre>
+      </aside>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

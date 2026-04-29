@@ -1,0 +1,259 @@
+package scheduler
+
+import (
+	"errors"
+	"sort"
+	"time"
+
+	"github.com/c9274326/woms/internal/domain"
+)
+
+const dateLayout = "2006-01-02"
+
+var ErrInvalidRequest = errors.New("invalid schedule request")
+
+type OrderInput struct {
+	ID       string
+	LineID   string
+	Quantity int
+	Priority domain.Priority
+	DueDate  time.Time
+}
+
+type ExistingAllocation struct {
+	OrderID  string
+	LineID   string
+	Date     time.Time
+	Quantity int
+	Priority domain.Priority
+	Locked   bool
+}
+
+type Allocation struct {
+	OrderID  string
+	LineID   string
+	Date     time.Time
+	Quantity int
+	Priority domain.Priority
+	Locked   bool
+}
+
+type Conflict struct {
+	OrderID            string
+	Reason             string
+	EarliestFinishDate time.Time
+	AffectedOrderIDs   []string
+}
+
+type Request struct {
+	LineID              string
+	CapacityPerDay      int
+	StartDate           time.Time
+	Orders              []OrderInput
+	ExistingAllocations []ExistingAllocation
+	ManualForce         bool
+	ForceReason         string
+}
+
+type Result struct {
+	Allocations []Allocation
+	Conflicts   []Conflict
+	FinishDate  time.Time
+}
+
+func Plan(req Request) (Result, error) {
+	if req.LineID == "" || req.CapacityPerDay <= 0 || req.StartDate.IsZero() {
+		return Result{}, ErrInvalidRequest
+	}
+
+	start := truncateDate(req.StartDate)
+	orders := append([]OrderInput(nil), req.Orders...)
+	sort.SliceStable(orders, func(i, j int) bool {
+		if orders[i].Priority != orders[j].Priority {
+			return orders[i].Priority == domain.PriorityHigh
+		}
+		if !orders[i].DueDate.Equal(orders[j].DueDate) {
+			return orders[i].DueDate.Before(orders[j].DueDate)
+		}
+		return orders[i].ID < orders[j].ID
+	})
+
+	highUsed := map[string]int{}
+	lowUsed := map[string]int{}
+	lowByDate := map[string][]string{}
+	lockedByDate := map[string][]string{}
+	for _, allocation := range req.ExistingAllocations {
+		if allocation.LineID != req.LineID {
+			continue
+		}
+		key := dateKey(allocation.Date)
+		if req.ManualForce {
+			if allocation.Priority == domain.PriorityHigh || allocation.Locked {
+				lockedByDate[key] = appendUnique(lockedByDate[key], allocation.OrderID)
+			} else {
+				lowByDate[key] = appendUnique(lowByDate[key], allocation.OrderID)
+			}
+			continue
+		}
+		if allocation.Priority == domain.PriorityHigh || allocation.Locked {
+			highUsed[key] += allocation.Quantity
+			lockedByDate[key] = appendUnique(lockedByDate[key], allocation.OrderID)
+			continue
+		}
+		lowUsed[key] += allocation.Quantity
+		lowByDate[key] = appendUnique(lowByDate[key], allocation.OrderID)
+	}
+
+	var result Result
+	newUsed := map[string]int{}
+	reportedAffected := map[string]bool{}
+
+	for _, order := range orders {
+		if err := validateOrder(req.LineID, order); err != nil {
+			return Result{}, err
+		}
+		remaining := order.Quantity
+		day := start
+		due := truncateDate(order.DueDate)
+
+		for remaining > 0 {
+			key := dateKey(day)
+			if day.After(due) {
+				finish := estimateFinishDate(req, order, day, remaining, highUsed, lowUsed, newUsed)
+				result.Conflicts = append(result.Conflicts, Conflict{
+					OrderID:            order.ID,
+					Reason:             "capacity cannot satisfy order before due date",
+					EarliestFinishDate: finish,
+				})
+				break
+			}
+
+			used := highUsed[key] + newUsed[key]
+			if order.Priority != domain.PriorityHigh && !req.ManualForce {
+				used += lowUsed[key]
+			}
+			available := req.CapacityPerDay - used
+			if available <= 0 {
+				day = day.AddDate(0, 0, 1)
+				continue
+			}
+
+			qty := min(remaining, available)
+			result.Allocations = append(result.Allocations, Allocation{
+				OrderID:  order.ID,
+				LineID:   req.LineID,
+				Date:     day,
+				Quantity: qty,
+				Priority: order.Priority,
+				Locked:   order.Priority == domain.PriorityHigh,
+			})
+			newUsed[key] += qty
+			remaining -= qty
+			if result.FinishDate.Before(day) {
+				result.FinishDate = day
+			}
+
+			if order.Priority == domain.PriorityHigh || req.ManualForce {
+				affected := append([]string{}, lowByDate[key]...)
+				if req.ManualForce {
+					affected = appendUniqueMany(affected, lockedByDate[key])
+				}
+				if len(affected) > 0 && !reportedAffected[order.ID+"@"+key] {
+					result.Conflicts = append(result.Conflicts, Conflict{
+						OrderID:            order.ID,
+						Reason:             "existing allocations require manual review or reschedule",
+						EarliestFinishDate: day,
+						AffectedOrderIDs:   affected,
+					})
+					reportedAffected[order.ID+"@"+key] = true
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+type ConfirmationResult struct {
+	Completed bool
+	Remainder *domain.Order
+}
+
+func ConfirmProduction(order domain.Order, produced int, now time.Time) (ConfirmationResult, error) {
+	if produced < 0 || produced > order.Quantity {
+		return ConfirmationResult{}, ErrInvalidRequest
+	}
+	if produced == order.Quantity {
+		return ConfirmationResult{Completed: true}, nil
+	}
+
+	remainder := order
+	remainder.ID = ""
+	remainder.Quantity = order.Quantity - produced
+	remainder.Status = domain.StatusPending
+	remainder.SourceOrder = order.ID
+	remainder.CreatedAt = now
+	remainder.UpdatedAt = now
+	return ConfirmationResult{Completed: false, Remainder: &remainder}, nil
+}
+
+func validateOrder(lineID string, order OrderInput) error {
+	if order.ID == "" || order.LineID != lineID || order.Quantity <= 0 || order.DueDate.IsZero() {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func estimateFinishDate(req Request, order OrderInput, start time.Time, remaining int, highUsed, lowUsed, newUsed map[string]int) time.Time {
+	day := truncateDate(start)
+	for remaining > 0 {
+		key := dateKey(day)
+		used := highUsed[key] + newUsed[key]
+		if order.Priority != domain.PriorityHigh && !req.ManualForce {
+			used += lowUsed[key]
+		}
+		available := req.CapacityPerDay - used
+		if available > 0 {
+			remaining -= min(remaining, available)
+		}
+		if remaining > 0 {
+			day = day.AddDate(0, 0, 1)
+		}
+	}
+	return day
+}
+
+func truncateDate(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+func dateKey(value time.Time) string {
+	return truncateDate(value).Format(dateLayout)
+}
+
+func appendUnique(values []string, value string) []string {
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func appendUniqueMany(values []string, additions []string) []string {
+	for _, value := range additions {
+		values = appendUnique(values, value)
+	}
+	return values
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

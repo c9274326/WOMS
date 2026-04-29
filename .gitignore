@@ -1,0 +1,42 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Go
+bin/
+coverage.out
+*.test
+
+# Docker and local volumes
+.docker/
+docker-data/
+volumes/
+
+# Kubernetes and Helm local state
+kubeconfig*
+*.kubeconfig
+*.tgz
+charts/
+
+# Logs and runtime files
+*.log
+tmp/
+*.pid
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Frontend generated artifacts
+web/dist/
+node_modules/
+
+# Test and cache outputs
+.cache/
+.pytest_cache/

@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "woms.fullname" . }}-worker
+  labels:
+    {{- include "woms.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler-worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: scheduler-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: scheduler-worker
+    spec:
+      containers:
+        - name: scheduler-worker
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.keda.kafka.bootstrapServers | quote }}
+            - name: KAFKA_SCHEDULE_TOPIC
+              value: {{ .Values.keda.kafka.topic | quote }}
+            - name: KAFKA_CONSUMER_GROUP
+              value: {{ .Values.keda.kafka.consumerGroup | quote }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true

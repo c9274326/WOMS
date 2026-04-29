@@ -1,0 +1,97 @@
+package domain
+
+import "time"
+
+type Role string
+
+const (
+	RoleSales     Role = "sales"
+	RoleScheduler Role = "scheduler"
+)
+
+type Priority string
+
+const (
+	PriorityLow  Priority = "low"
+	PriorityHigh Priority = "high"
+)
+
+type OrderStatus string
+
+const (
+	StatusPending    OrderStatus = "待排程"
+	StatusScheduled  OrderStatus = "已排程"
+	StatusInProgress OrderStatus = "生產中"
+	StatusCompleted  OrderStatus = "已完成"
+)
+
+type User struct {
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"-"`
+	Role         Role   `json:"role"`
+	LineID       string `json:"lineId,omitempty"`
+}
+
+type ProductionLine struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	CapacityPerDay int    `json:"capacityPerDay"`
+}
+
+type Order struct {
+	ID          string      `json:"id"`
+	Customer    string      `json:"customer"`
+	LineID      string      `json:"lineId"`
+	Quantity    int         `json:"quantity"`
+	Priority    Priority    `json:"priority"`
+	Status      OrderStatus `json:"status"`
+	DueDate     time.Time   `json:"dueDate"`
+	CreatedBy   string      `json:"createdBy"`
+	SourceOrder string      `json:"sourceOrder,omitempty"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	UpdatedAt   time.Time   `json:"updatedAt"`
+}
+
+type ScheduleAllocation struct {
+	OrderID  string    `json:"orderId"`
+	LineID   string    `json:"lineId"`
+	Date     time.Time `json:"date"`
+	Quantity int       `json:"quantity"`
+	Priority Priority  `json:"priority"`
+	Locked   bool      `json:"locked"`
+}
+
+type ScheduleConflict struct {
+	OrderID            string    `json:"orderId"`
+	Reason             string    `json:"reason"`
+	EarliestFinishDate time.Time `json:"earliestFinishDate"`
+	AffectedOrderIDs   []string  `json:"affectedOrderIds,omitempty"`
+}
+
+type ScheduleJobStatus string
+
+const (
+	JobQueued    ScheduleJobStatus = "queued"
+	JobRunning   ScheduleJobStatus = "running"
+	JobCompleted ScheduleJobStatus = "completed"
+	JobFailed    ScheduleJobStatus = "failed"
+)
+
+type ScheduleJob struct {
+	ID        string            `json:"id"`
+	LineID    string            `json:"lineId"`
+	Status    ScheduleJobStatus `json:"status"`
+	Message   string            `json:"message,omitempty"`
+	CreatedAt time.Time         `json:"createdAt"`
+	UpdatedAt time.Time         `json:"updatedAt"`
+}
+
+type AuditEntry struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actorId"`
+	Action    string    `json:"action"`
+	Resource  string    `json:"resource"`
+	Reason    string    `json:"reason,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}

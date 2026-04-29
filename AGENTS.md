@@ -1,0 +1,63 @@
+# WOMS Agent Guide / WOMS Agent 指南
+
+## zh-TW
+
+### 專案目標
+WOMS 是晶圓訂單管理與排程系統，必須以最終部署型態開發：Go API、Go scheduler worker、原生 HTML/CSS/JS 前端、PostgreSQL、Redis、Apache Kafka、Docker、Kubernetes、Helm、NGINX Ingress、KEDA、GitHub Actions 與 Docker Hub。
+
+### 分支與 Git 規則
+- 禁止直接在 `main` 開發。
+- 功能分支使用 `feat/xxxx-xxxx` 命名，例如 `feat/woms-foundation`。
+- 每完成一項功能都必須執行可用測試、更新 README、更新 `.gitignore`、`git add`、commit、push。
+- 不得提交 secrets、`.env`、本機 volume、build output、cache、IDE 私有設定。
+
+### 文件規則
+- 所有 `.md` 報告與文件都必須有 `zh-TW` 與 `en` 版本。
+- `README.md` 預設使用英文，頂部提供語言列可跳到 `README.zh-TW.md`；同時保留 `README.en.md` 作英文版本。
+- `AGENTS.md` 在同一檔案中維持雙語內容，作為團隊上下文記憶。
+- 一般報告使用成對檔案，例如 `docs/implementation-plan.zh-TW.md` 與 `docs/implementation-plan.en.md`。
+- 實作或部署行為改變時，README 必須同步更新。
+
+### 開發原則
+- 採 TDD。排程、權限、狀態轉換、Redis lock、Kafka job flow、KEDA 驗證腳本都要先有測試或明確驗證案例。
+- Go 程式碼必須可 `gofmt`，並通過 `go test ./...`。
+- API 必須使用 JWT 與 RBAC；Ingress auth 只作為入口驗證，Go API 必須再次驗證。
+- 排程演算法必須 deterministic，避免同樣輸入產生不同結果。
+- 任何人工強制介入高優先級訂單都必須留下 audit log。
+
+### 部署與驗證
+- Docker image 必須可由 GitHub Actions build 並推到 Docker Hub。
+- Kubernetes 部署使用 Helm chart，image tag 必須可由 values 指定。
+- KEDA worker autoscaling 主要使用 Kafka lag，CPU trigger 為輔助。
+- 完成功能後需依 `docs/verification.zh-TW.md` 與 `docs/verification.en.md` 驗證。
+
+## en
+
+### Project Goal
+WOMS is a wafer order management and scheduling system. It must be built in the final deployment shape: Go API, Go scheduler worker, vanilla HTML/CSS/JS frontend, PostgreSQL, Redis, Apache Kafka, Docker, Kubernetes, Helm, NGINX Ingress, KEDA, GitHub Actions, and Docker Hub.
+
+### Branch And Git Rules
+- Never develop directly on `main`.
+- Feature branches use `feat/xxxx-xxxx`, for example `feat/woms-foundation`.
+- After every completed feature, run available tests, update README, update `.gitignore`, `git add`, commit, and push.
+- Do not commit secrets, `.env`, local volumes, build outputs, caches, or private IDE settings.
+
+### Documentation Rules
+- Every `.md` report and document must provide both `zh-TW` and `en` content.
+- `README.md` defaults to English and provides a language switcher to `README.zh-TW.md`; keep `README.en.md` as the English version.
+- `AGENTS.md` keeps both languages in the same file as shared team memory.
+- General reports use paired files, for example `docs/implementation-plan.zh-TW.md` and `docs/implementation-plan.en.md`.
+- README must be updated whenever implementation or deployment behavior changes.
+
+### Development Principles
+- Use TDD. Scheduling, authorization, state transitions, Redis locks, Kafka job flow, and KEDA verification scripts need tests or explicit verification scenarios.
+- Go code must be `gofmt` compatible and pass `go test ./...`.
+- APIs must use JWT and RBAC. Ingress auth is only an entry check; the Go API must validate again.
+- Scheduling must be deterministic so the same input produces the same result.
+- Any manual force intervention that moves high-priority orders must create an audit log.
+
+### Deployment And Verification
+- Docker images must be buildable by GitHub Actions and pushable to Docker Hub.
+- Kubernetes deployment uses a Helm chart, and image tags must be configurable through values.
+- KEDA worker autoscaling primarily uses Kafka lag, with CPU as a secondary trigger.
+- Completed features must be verified with `docs/verification.zh-TW.md` and `docs/verification.en.md`.

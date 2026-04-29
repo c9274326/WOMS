@@ -1,0 +1,29 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "woms.fullname" . }}-worker
+  labels:
+    {{- include "woms.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "woms.fullname" . }}-worker
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ .Values.keda.kafka.bootstrapServers | quote }}
+        topic: {{ .Values.keda.kafka.topic | quote }}
+        consumerGroup: {{ .Values.keda.kafka.consumerGroup | quote }}
+        lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}
+        offsetResetPolicy: {{ .Values.keda.kafka.offsetResetPolicy | quote }}
+    {{- if .Values.keda.cpu.enabled }}
+    - type: cpu
+      metadata:
+        type: Utilization
+        value: {{ .Values.keda.cpu.targetUtilization | quote }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,205 @@
+<p align="center">
+  <strong>WOMS</strong>
+</p>
+
+<p align="center">
+  Wafer Order Management And Scheduling System
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh-TW.md">繁體中文</a>
+</p>
+
+<p align="center">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square">
+  <img alt="Kubernetes" src="https://img.shields.io/badge/Kubernetes-Helm-326CE5?style=flat-square">
+  <img alt="KEDA" src="https://img.shields.io/badge/KEDA-autoscaling-4B32C3?style=flat-square">
+</p>
+
+---
+
+WOMS is a wafer order management and scheduling system built in its final deployment shape. Sales users create and track orders, scheduler engineers manage production-line schedules and daily production confirmations, and Kafka, Redis, KEDA, and Kubernetes support async rescheduling and scaling.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  User[User] --> Ingress[NGINX Ingress / HTTPS]
+  Ingress --> Web[Static Web / NGINX]
+  Ingress --> API[Go API]
+  API --> Auth[JWT + RBAC]
+  API --> DB[(PostgreSQL)]
+  API --> Redis[(Redis Locks)]
+  API --> Kafka[(Apache Kafka)]
+  Kafka --> Worker[Go Scheduler Worker]
+  Worker --> Redis
+  Worker --> DB
+  KEDA[KEDA ScaledObject] --> Worker
+```
+
+### Deployable Units
+
+- `web`: vanilla HTML/CSS/JS frontend served by NGINX.
+- `api`: Go REST API for JWT, RBAC, orders, schedule preview, schedule jobs, production confirmation, and audit logs.
+- `scheduler-worker`: Go worker, prepared for Kafka consumer scheduling jobs.
+- `deploy/helm/woms`: Kubernetes Helm chart for API, worker, web, Ingress, and KEDA.
+
+## Prerequirements
+
+Install these tools first:
+
+- Git
+- Go 1.22+
+- Docker or Docker Desktop
+- Docker Compose
+- kubectl
+- Helm 3
+- A Kubernetes cluster, such as Docker Desktop Kubernetes, kind, minikube, or cloud K8s
+- NGINX Ingress Controller
+- KEDA
+- metrics-server, required for CPU autoscaling verification
+
+Check your tools:
+
+```bash
+go version
+docker --version
+docker compose version
+kubectl version --client=true
+helm version
+```
+
+## Project Settings
+
+Copy the sample environment file:
+
+```bash
+cp .env.example .env
+```
+
+Important settings:
+
+- `JWT_SECRET`: JWT signing secret. Replace it in production.
+- `DATABASE_URL`: PostgreSQL connection string.
+- `REDIS_ADDR`: Redis address.
+- `KAFKA_BROKERS`: Kafka broker list.
+- `KAFKA_SCHEDULE_TOPIC`: schedule job topic.
+- `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
+
+Demo accounts:
+
+- Sales: `sales` / `demo`
+- Line A scheduler: `scheduler-a` / `demo`
+- Line B scheduler: `scheduler-b` / `demo`
+- Line C scheduler: `scheduler-c` / `demo`
+- Line D scheduler: `scheduler-d` / `demo`
+
+## Local Development
+
+Run tests:
+
+```bash
+go test ./...
+```
+
+Run the API:
+
+```bash
+JWT_SECRET=local-dev-secret go run ./cmd/api
+```
+
+Run with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Default services:
+
+- API: `http://localhost:8080`
+- Web: `http://localhost:8081`
+- PostgreSQL: `localhost:5432`
+- Redis: `localhost:6379`
+- Kafka: `localhost:9092`
+
+## Docker Build
+
+```bash
+docker build -f Dockerfile.api -t woms-api:local .
+docker build -f Dockerfile.worker -t woms-scheduler-worker:local .
+docker build -f Dockerfile.web -t woms-web:local .
+```
+
+## Kubernetes Deployment
+
+Make sure the cluster has NGINX Ingress, KEDA, and metrics-server installed first.
+
+Render Helm:
+
+```bash
+helm template woms ./deploy/helm/woms \
+  --set api.image.repository=docker.io/<namespace>/woms-api \
+  --set worker.image.repository=docker.io/<namespace>/woms-scheduler-worker \
+  --set web.image.repository=docker.io/<namespace>/woms-web \
+  --set api.image.tag=<tag> \
+  --set worker.image.tag=<tag> \
+  --set web.image.tag=<tag>
+```
+
+Deploy:
+
+```bash
+helm upgrade --install woms ./deploy/helm/woms \
+  --namespace woms --create-namespace \
+  --set ingress.host=woms.local \
+  --set api.jwtSecret=<strong-secret> \
+  --set api.image.repository=docker.io/<namespace>/woms-api \
+  --set worker.image.repository=docker.io/<namespace>/woms-scheduler-worker \
+  --set web.image.repository=docker.io/<namespace>/woms-web \
+  --set api.image.tag=<tag> \
+  --set worker.image.tag=<tag> \
+  --set web.image.tag=<tag>
+```
+
+## CI/CD
+
+GitHub Actions runs:
+
+- `go test ./...`
+- `gofmt` check
+- API, worker, and web Docker builds
+- Helm rendering
+- Docker Hub push and tagging
+
+Required GitHub repository settings:
+
+- Secret: `DOCKERHUB_TOKEN`
+- Variable: `DOCKERHUB_USERNAME`
+- Variable: `DOCKERHUB_NAMESPACE`
+
+Image tags include branch tags and short SHA. Production `latest` is reserved for the protected release/main flow.
+
+## Post-Implementation Verification
+
+Full verification steps:
+
+- [Verification Guide zh-TW](docs/verification.zh-TW.md)
+- [Verification Guide en](docs/verification.en.md)
+
+Helper scripts:
+
+```bash
+BASE_URL=http://localhost:8080 ./scripts/smoke-api.sh
+NAMESPACE=woms ./scripts/verify-k8s.sh
+```
+
+Minimum completion criteria:
+
+- API without token returns `401`.
+- Sales calling scheduler APIs returns `403`.
+- Scheduler A cannot read or mutate Scheduler B line data.
+- `helm template` renders Ingress and KEDA `ScaledObject`.
+- Worker replicas scale up when Kafka lag increases and scale down after lag drains.
+- README, tests, commit, and push must be completed with every feature.

@@ -1,0 +1,73 @@
+global:
+  imagePullPolicy: IfNotPresent
+
+api:
+  replicaCount: 2
+  image:
+    repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-api
+    tag: latest
+  jwtSecret: change-me-in-production
+  env:
+    databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
+    redisAddr: redis:6379
+    kafkaBrokers: kafka:9092
+    scheduleTopic: woms.schedule.jobs
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+worker:
+  replicaCount: 1
+  image:
+    repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-scheduler-worker
+    tag: latest
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+web:
+  replicaCount: 2
+  image:
+    repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-web
+    tag: latest
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: woms.local
+  tls:
+    enabled: false
+    secretName: woms-tls
+  auth:
+    enabled: true
+
+keda:
+  enabled: true
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 30
+  cooldownPeriod: 120
+  kafka:
+    bootstrapServers: kafka:9092
+    topic: woms.schedule.jobs
+    consumerGroup: woms-scheduler-workers
+    lagThreshold: "10"
+    offsetResetPolicy: latest
+  cpu:
+    enabled: true
+    targetUtilization: "70"
