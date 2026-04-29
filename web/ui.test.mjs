@@ -44,10 +44,24 @@ test("exactFilterOrders applies OR within fields and AND across fields", () => {
   const result = exactFilterOrders(orders, {
     customers: new Set(["ACME"]),
     lines: new Set(["A", "B"]),
-    statuses: new Set(["待排程"]),
+    status: "待排程",
     priorities: new Set(),
   });
   assert.deepEqual(result.map((item) => item.id), ["ORD-1"]);
+});
+
+test("exactFilterOrders treats status as single-select", () => {
+  const orders = [
+    { id: "ORD-1", customer: "ACME", lineId: "A", status: "待排程", priority: "high" },
+    { id: "ORD-2", customer: "ACME", lineId: "A", status: "已排程", priority: "low" },
+  ];
+  const result = exactFilterOrders(orders, {
+    customers: new Set(),
+    lines: new Set(),
+    status: "已排程",
+    priorities: new Set(),
+  });
+  assert.deepEqual(result.map((item) => item.id), ["ORD-2"]);
 });
 
 test("uniqueValues and statusCounts provide sidebar/filter data", () => {

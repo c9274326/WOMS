@@ -149,6 +149,11 @@ Submit jobs for different lines:
 
 - Login at `http://127.0.0.1:8081`.
 - Refresh the browser and confirm the session is restored.
-- Toggle exact filters for customer, line, status, and priority.
-- Use schedule preview and confirm allocation cards render.
-- Create a schedule job and confirm the monthly calendar shows actual scheduled-date allocations.
+- Confirm the login form is hidden after login and the header shows the current username plus logout.
+- Login as `admin` / `demo`, confirm the Admin panel is visible, and confirm non-admin users do not see it.
+- Toggle exact filters for customer, line, and priority; confirm status behaves as a single-select filter.
+- Create a sales draft order preview, confirm the preview page highlights calendar results, then confirm it into pending orders.
+- As a scheduler, select pending orders, preview first, then confirm execution from the preview page. A direct schedule job API call without `previewId` must fail.
+- Delete selected pending/scheduled orders and confirm removed scheduled allocations disappear from the calendar.
+- Use the conflict demo button, preview the generated same-day orders, and confirm a conflict report is shown.
+- Confirm permission failures and operation mistakes appear in popup dialogs.

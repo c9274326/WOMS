@@ -98,6 +98,7 @@ GitHub Actions Docker Hub 設定：
 
 Demo 帳號：
 
+- 管理員：`admin` / `demo`
 - 業務：`sales` / `demo`
 - A 線排程：`scheduler-a` / `demo`
 - B 線排程：`scheduler-b` / `demo`
@@ -135,10 +136,15 @@ docker compose up --build
 前端行為：
 
 - 登入狀態會存在瀏覽器 `localStorage`，重新整理後會保留 session，直到 JWT 過期或被 API 拒絕。
-- 精準篩選支援客戶、產線、狀態、優先級。同欄位多選是 OR，不同欄位之間是 AND。
-- 狀態側邊欄顯示 WOMS 四種狀態，並可切換精準狀態篩選。
-- 試排程會顯示 allocation cards，但不保存。
-- 建立排程任務後會把 allocations 存在目前的 in-memory API store，並依實際排程日渲染在月曆。
+- 登入後會隱藏帳號密碼欄位，頁首顯示目前帳號與登出按鈕。
+- admin 可在 Admin panel 指派帳號角色與 scheduler 所屬產線；非 admin 呼叫會回 `403`。
+- 精準篩選支援客戶、產線、狀態、優先級。客戶/產線/優先級可同欄位多選 OR；狀態改為單選。
+- 試排結果會開啟確認頁面，並在日曆高亮 preview allocations；preview 不會寫入正式資料。
+- sales 會先預覽草稿訂單，再確認是否放到待排程訂單。
+- scheduler 必須先預覽已選取的待排程訂單，再從 preview 頁面確認執行；缺少 `previewId` 的直接排程 API 會被拒絕。
+- 權限不足、操作錯誤與操作結果會以彈出訊息視窗顯示。
+- `scheduler-a` demo 訂單 `ORD-2` 已補上 demo allocation，因此會顯示在月曆。
+- 衝突測試按鈕會建立多張同日大量訂單，方便在 preview 看到衝突報告。
 
 資料持久化說明：
 
@@ -194,7 +200,9 @@ GitHub Actions 會執行：
 - `gofmt` 檢查
 - API、worker、web Docker build
 - Helm render
-- Docker Hub push 與 tag
+- `main`、`release/**` 或手動執行時才會 Docker Hub push 與 tag
+- `main` publish 成功後自動更新 Helm image tag
+- 每次成功 publish 到 `main` 會自動建立 Git tag，預設格式為 `v0.1.<run-number>`
 
 GitHub repository 需設定：
 
@@ -202,7 +210,7 @@ GitHub repository 需設定：
 - Variable: `DOCKERHUB_USERNAME`
 - Variable: `DOCKERHUB_NAMESPACE`
 
-Image tag 包含 branch tag、short SHA；正式 `latest` 僅保留給受保護 release/main 流程。
+Image tags 會包含 release tag、short SHA，以及 protected main/release publish flow 的 `latest`。`docker-publish` workflow 會把 release tag 回寫到 `deploy/helm/woms/values.yaml` 並用 `[skip ci]` commit，之後建立對應 Git tag。
 
 分支流程：
 

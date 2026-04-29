@@ -20,6 +20,14 @@ func NewDemoMemoryStore() *MemoryStore {
 	if order, ok := store.orders["ORD-2"]; ok {
 		order.Status = domain.StatusScheduled
 		store.orders[order.ID] = order
+		store.allocations = append(store.allocations, domain.ScheduleAllocation{
+			OrderID:  order.ID,
+			LineID:   order.LineID,
+			Date:     order.DueDate,
+			Quantity: order.Quantity,
+			Priority: order.Priority,
+			Locked:   false,
+		})
 	}
 	if order, ok := store.orders["ORD-4"]; ok {
 		order.Status = domain.StatusInProgress
