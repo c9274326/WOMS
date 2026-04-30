@@ -63,6 +63,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSchedulePreview(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/schedules/calendar":
 		s.handleScheduleCalendar(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/schedules/history":
+		s.handleScheduleHistory(w, r)
 	case r.URL.Path == "/api/schedules/jobs":
 		s.handleScheduleJobs(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/schedules/jobs/"):
@@ -315,6 +317,21 @@ func (s *Server) handleScheduleCalendar(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleScheduleHistory(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	lineID := r.URL.Query().Get("lineId")
+	history, err := s.store.ScheduleHistory(lineID, claims)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"history": history})
+}
+
 func (s *Server) handleScheduleJobs(w http.ResponseWriter, r *http.Request) {
 	claims, err := s.claimsFromRequest(r)
 	if err != nil {
@@ -561,6 +578,9 @@ func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, clai
 	if order.Status != domain.StatusPending && order.Status != domain.StatusRejected {
 		return domain.Order{}, errors.New("only pending or rejected orders can change order details")
 	}
+	if strings.TrimSpace(req.Note) != "" {
+		return domain.Order{}, errors.New("note cannot be updated after order creation")
+	}
 	if req.DueDate != "" {
 		dueDate, err := time.Parse(dateLayout, req.DueDate)
 		if err != nil {
@@ -573,12 +593,6 @@ func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, clai
 			return domain.Order{}, errors.New("quantity must be between 25 and 2500")
 		}
 		order.Quantity = req.Quantity
-	}
-	if req.Note != "" {
-		if len([]rune(req.Note)) > 120 {
-			return domain.Order{}, errors.New("note must be 120 characters or fewer")
-		}
-		order.Note = req.Note
 	}
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
@@ -678,6 +692,9 @@ func (s *MemoryStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Claims
 	if order.Status != domain.StatusRejected {
 		return domain.Order{}, errors.New("only rejected orders can be resubmitted")
 	}
+	if strings.TrimSpace(req.Note) != "" {
+		return domain.Order{}, errors.New("note cannot be updated after order creation")
+	}
 	if req.Quantity != 0 {
 		if req.Quantity < 25 || req.Quantity > 2500 {
 			return domain.Order{}, errors.New("quantity must be between 25 and 2500")
@@ -691,10 +708,6 @@ func (s *MemoryStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Claims
 		}
 		order.DueDate = dueDate
 	}
-	if len([]rune(req.Note)) > 120 {
-		return domain.Order{}, errors.New("note must be 120 characters or fewer")
-	}
-	order.Note = strings.TrimSpace(req.Note)
 	order.Status = domain.StatusPending
 	order.RejectionReason = ""
 	order.RejectedBy = ""
@@ -977,6 +990,59 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 	})
 
 	return calendarResponse{LineID: lineID, Month: month, Allocations: allocations}, nil
+}
+
+func (s *MemoryStore) ScheduleHistory(lineID string, claims auth.Claims) ([]domain.AuditEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if claims.Role != domain.RoleAdmin && claims.Role != domain.RoleScheduler {
+		return nil, errors.New("only admin or schedulers can read schedule history")
+	}
+	if claims.Role == domain.RoleScheduler {
+		lineID = claims.LineID
+	} else if lineID != "" {
+		if _, ok := s.lines[lineID]; !ok {
+			return nil, errors.New("production line does not exist")
+		}
+	}
+
+	history := []domain.AuditEntry{}
+	for index := len(s.audits) - 1; index >= 0 && len(history) < 12; index-- {
+		entry := s.audits[index]
+		if !isSchedulerWorkflowAudit(entry.Action) {
+			continue
+		}
+		if lineID != "" && s.auditResourceLineLocked(entry) != lineID {
+			continue
+		}
+		history = append(history, entry)
+	}
+	return history, nil
+}
+
+func isSchedulerWorkflowAudit(action string) bool {
+	switch action {
+	case "schedule.job.create",
+		"schedule.job.manual_force",
+		"order.reject",
+		"production.start",
+		"production.confirm.complete",
+		"production.confirm.partial":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *MemoryStore) auditResourceLineLocked(entry domain.AuditEntry) string {
+	if job, ok := s.jobs[entry.Resource]; ok {
+		return job.LineID
+	}
+	if order, ok := s.orders[entry.Resource]; ok {
+		return order.LineID
+	}
+	return ""
 }
 
 type productionConfirmRequest struct {

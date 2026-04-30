@@ -26,6 +26,8 @@ charts/
 # Logs and runtime files
 *.log
 tmp/
+.tmp/
+.tmp-*.txt
 *.pid
 
 # OS and editor files
@@ -40,4 +42,5 @@ node_modules/
 
 # Test and cache outputs
 .cache/
+.gocache/
 .pytest_cache/
