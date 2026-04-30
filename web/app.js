@@ -8,6 +8,7 @@ import {
   monthGrid,
   priorityClass,
   priorityLabel,
+  sortOrdersForWorkstation,
   statusClass,
   statusCounts,
   uniqueValues,
@@ -245,6 +246,22 @@ document.getElementById("preview-page-list").addEventListener("click", async (ev
       await retryPreview({ startDate: dateInputValue(new Date()), manualForce: false, reason: "" });
       return;
     }
+    if (action === "retry-suggested-start") {
+      await retryPreview({ startDate: suggestedStartDate(state.preview), manualForce: false, reason: "" });
+      return;
+    }
+    if (action === "update-conflict-due-date") {
+      const orderId = event.target.dataset.orderId;
+      const input = document.querySelector(`[data-conflict-due-date="${cssEscape(orderId)}"]`);
+      if (!input?.value) {
+        showMessage("請選擇交期", "修改交期後才能重新試排。", "warn");
+        return;
+      }
+      await updateOrderDueDate(orderId, input.value);
+      await loadOrders();
+      await retryPreview({});
+      return;
+    }
     if (action === "retry-manual-force") {
       const conflicts = state.preview.conflicts ?? [];
       if (!conflictsCanBeManuallyForced(conflicts)) {
@@ -384,12 +401,14 @@ function renderUsers() {
 }
 
 function renderOrders() {
-  const filtered = exactFilterOrders(visibleLineOrders(), state.filters);
+  const filtered = sortOrdersForWorkstation(exactFilterOrders(visibleLineOrders(), state.filters));
   const body = document.getElementById("orders-body");
   const showSelection = state.user?.role === "scheduler";
   body.innerHTML = "";
   for (const order of filtered) {
     const row = document.createElement("tr");
+    row.draggable = state.user?.role === "scheduler" && order.status === "待排程";
+    row.dataset.orderId = order.id;
     row.innerHTML = `
       <td class="select-cell scheduler-only" ${showSelection ? "" : "hidden"}><input type="checkbox" data-order-id="${escapeHtml(order.id)}" ${state.selectedOrderIds.has(order.id) ? "checked" : ""} ${order.status === "待排程" ? "" : "disabled"}></td>
       <td>${escapeHtml(order.id)}</td>
@@ -398,10 +417,16 @@ function renderOrders() {
       <td class="numeric">${order.quantity.toLocaleString()}</td>
       <td><span class="tag ${priorityClass(order.priority)}">${priorityLabel(order.priority)}</span></td>
       <td><span class="tag ${statusClass(order.status)}">${escapeHtml(order.status)}</span></td>
-      <td>${dateOnly(order.dueDate)}</td>
+      <td>${dateOnly(order.dueDate)}${renderOrderAction(order)}</td>
     `;
     body.appendChild(row);
   }
+  body.querySelectorAll("tr[draggable='true']").forEach((row) => {
+    row.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("text/plain", row.dataset.orderId);
+      event.dataTransfer.effectAllowed = "move";
+    });
+  });
   body.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) {
@@ -411,6 +436,9 @@ function renderOrders() {
       }
       updateSelectedCount();
     });
+  });
+  body.querySelectorAll("[data-order-action]").forEach((button) => {
+    button.addEventListener("click", () => handleOrderAction(button.dataset.orderAction, button.dataset.orderId));
   });
   updateSelectedCount();
 }
@@ -498,6 +526,7 @@ function renderCalendar() {
     const allocations = groups[day.key] ?? [];
     const cell = document.createElement("div");
     cell.className = `calendar-day ${day.inMonth ? "" : "outside"} ${allocations.some((item) => item.preview) ? "preview-highlight" : ""}`;
+    cell.dataset.date = day.key;
     cell.innerHTML = `
       <div class="calendar-day-number">
         <span>${day.date.getUTCDate()}</span>
@@ -506,6 +535,18 @@ function renderCalendar() {
       ${renderWaterline(allocations)}
       ${allocations.map(renderCalendarItem).join("")}
     `;
+    cell.addEventListener("dragover", (event) => {
+      if (state.user?.role === "scheduler" && day.inMonth) {
+        event.preventDefault();
+      }
+    });
+    cell.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      const orderId = event.dataTransfer.getData("text/plain");
+      if (orderId && day.inMonth) {
+        await scheduleDroppedOrder(orderId, day.key);
+      }
+    });
     grid.appendChild(cell);
   }
 }
@@ -622,6 +663,7 @@ function renderConflictActions(conflicts, manualForce) {
   const canManualForce = conflictsCanBeManuallyForced(conflicts);
   const startDate = state.preview.request.startDate || new Date().toISOString().slice(0, 10);
   const todayValue = dateInputValue(new Date());
+  const suggestedStart = suggestedStartDate(state.preview);
   const manualForceControls = canManualForce && !manualForce ? `
     <label>
       <span>人工介入原因</span>
@@ -641,6 +683,8 @@ function renderConflictActions(conflicts, manualForce) {
       </label>
       <button data-preview-action="retry-start-date" type="button">用新開始日期重新試排</button>
       ${startDate !== todayValue ? `<button data-preview-action="retry-today" type="button">改從今天重新試排</button>` : ""}
+      ${suggestedStart && suggestedStart !== startDate ? `<button data-preview-action="retry-suggested-start" type="button">改從建議開始日 ${escapeHtml(suggestedStart)} 重試</button>` : ""}
+      ${renderConflictDueDateEditors(conflicts)}
       ${manualForceControls}
       ${lockedNote}
       <button class="secondary-button" data-preview-action="return-workstation" type="button">回工作站調整訂單</button>
@@ -652,6 +696,7 @@ function renderWaterline(allocations) {
   const metrics = waterlineMetrics(allocations);
   const remainingLabel = metrics.overloaded ? "已超載" : "剩餘";
   const remainingValue = metrics.overloaded ? (metrics.total - metrics.capacity) : metrics.remaining;
+  const barWidth = metrics.overloaded ? 100 : metrics.remainingPercent;
   return `
     <div class="waterline" title="已排 ${metrics.total}/${metrics.capacity}，${remainingLabel} ${remainingValue}">
       <div class="waterline-meta">
@@ -659,7 +704,7 @@ function renderWaterline(allocations) {
         <strong>${remainingValue.toLocaleString()} 片</strong>
       </div>
       <div class="waterline-track">
-        <span style="width: ${metrics.percent}%; background: ${metrics.color};"></span>
+        <span style="width: ${barWidth}%; background: ${metrics.color};"></span>
       </div>
     </div>
   `;
@@ -673,6 +718,142 @@ function renderCalendarItem(allocation) {
       <span>${priorityLabel(allocation.priority)} · ${escapeHtml(allocation.status ?? "試排")}</span>
     </div>
   `;
+}
+
+function renderOrderAction(order) {
+  if (state.user?.role !== "scheduler") {
+    return "";
+  }
+  if (order.status === "已排程") {
+    return `<button class="row-action" data-order-action="start-production" data-order-id="${escapeHtml(order.id)}" type="button">開始生產</button>`;
+  }
+  if (order.status === "生產中") {
+    return `<button class="row-action" data-order-action="confirm-production" data-order-id="${escapeHtml(order.id)}" type="button">回報生產</button>`;
+  }
+  if (order.status === "待排程") {
+    return `<span class="row-hint">可拖曳到月曆</span>`;
+  }
+  return "";
+}
+
+async function handleOrderAction(action, orderId) {
+  try {
+    if (action === "start-production") {
+      await request("/api/production/start", {
+        method: "POST",
+        body: JSON.stringify({ orderId }),
+      });
+      showMessage("已開始生產", `${orderId} 已轉為生產中，排程日期已鎖定。`);
+      await refreshWorkspace();
+      return;
+    }
+    if (action === "confirm-production") {
+      const order = state.orders.find((item) => item.id === orderId);
+      const value = window.prompt("請輸入已完成片數；填入訂單總數代表全部完成。", String(order?.quantity ?? ""));
+      if (value === null) {
+        return;
+      }
+      const producedQuantity = Number(value);
+      if (!Number.isInteger(producedQuantity) || producedQuantity <= 0) {
+        showMessage("片數不正確", "已完成片數必須是大於 0 的整數。", "warn");
+        return;
+      }
+      const payload = await request("/api/production/confirm", {
+        method: "POST",
+        body: JSON.stringify({ orderId, producedQuantity }),
+      });
+      const suffix = payload.remainder ? `，剩餘 ${payload.remainder.quantity.toLocaleString()} 片已建立為 ${payload.remainder.id}` : "";
+      showMessage("生產回報完成", `${orderId} 已更新${suffix}。`);
+      await refreshWorkspace();
+    }
+  } catch (error) {
+    showMessage("操作失敗", error.message, "warn");
+  }
+}
+
+async function scheduleDroppedOrder(orderId, startDate) {
+  try {
+    const preview = await createPreview({
+      lineId: activeLine(),
+      startDate,
+      orderIds: [orderId],
+      manualForce: false,
+      reason: "",
+    }, "schedule");
+    if ((preview.conflicts ?? []).length > 0) {
+      openPreviewPage(preview);
+      return;
+    }
+    const payload = await request("/api/schedules/jobs", {
+      method: "POST",
+      body: JSON.stringify({ ...preview.request, previewId: preview.previewId }),
+    });
+    if (payload.status === "failed") {
+      openPreviewPage(preview);
+      showMessage("排程未完成", payload.message ?? "排程任務失敗。", "warn");
+      return;
+    }
+    state.preview = null;
+    state.selectedOrderIds.delete(orderId);
+    showMessage("已直接排程", `${orderId} 已從 ${startDate} 開始排入月曆。`);
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("拖曳排程失敗", error.message, "warn");
+  }
+}
+
+async function updateOrderDueDate(orderId, dueDate) {
+  return request(`/api/orders/${encodeURIComponent(orderId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ dueDate }),
+  });
+}
+
+function renderConflictDueDateEditors(conflicts) {
+  const orderIds = Array.from(new Set(conflicts.map((conflict) => conflict.orderId))).filter((orderId) => {
+    const order = state.orders.find((item) => item.id === orderId);
+    return order?.status === "待排程";
+  });
+  if (orderIds.length === 0) {
+    return "";
+  }
+  return `
+    <div class="conflict-due-date-editors">
+      <h4>修改單筆交期後重試</h4>
+      ${orderIds.map((orderId) => {
+        const order = state.orders.find((item) => item.id === orderId);
+        return `
+          <label>
+            <span>${escapeHtml(orderId)}</span>
+            <input data-conflict-due-date="${escapeHtml(orderId)}" type="date" value="${dateOnly(order.dueDate)}">
+          </label>
+          <button data-preview-action="update-conflict-due-date" data-order-id="${escapeHtml(orderId)}" type="button">更新 ${escapeHtml(orderId)} 交期並重試</button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function suggestedStartDate(preview) {
+  const orderIds = preview?.request?.orderIds ?? [];
+  const selected = state.orders.filter((order) => orderIds.includes(order.id));
+  if (selected.length === 0) {
+    return "";
+  }
+  const earliestDue = selected
+    .map((order) => new Date(dateOnly(order.dueDate)))
+    .sort((a, b) => a - b)[0];
+  const total = selected.reduce((sum, order) => sum + Number(order.quantity ?? 0), 0);
+  const daysNeeded = Math.max(1, Math.ceil(total / 10000));
+  earliestDue.setUTCDate(earliestDue.getUTCDate() - daysNeeded + 1);
+  return dateInputValue(earliestDue);
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) {
+    return CSS.escape(value);
+  }
+  return String(value).replaceAll('"', '\\"');
 }
 
 function updateSelectedCount() {

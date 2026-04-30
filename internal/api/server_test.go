@@ -389,6 +389,85 @@ func TestDeleteOrdersRemovesScheduledAllocation(t *testing.T) {
 	}
 }
 
+func TestSchedulerCanUpdatePendingOrderDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+
+	body := bytes.NewBufferString(`{"dueDate":"2026-05-06"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/orders/ORD-1", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("update due date failed: %d %s", res.Code, res.Body.String())
+	}
+	var order domain.Order
+	if err := json.Unmarshal(res.Body.Bytes(), &order); err != nil {
+		t.Fatalf("decode order response: %v", err)
+	}
+	if order.DueDate.Format("2006-01-02") != "2026-05-06" {
+		t.Fatalf("expected updated due date, got %s", order.DueDate)
+	}
+}
+
+func TestStartProductionLocksScheduledAllocations(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+
+	body := bytes.NewBufferString(`{"orderId":"ORD-1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/production/start", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("start production failed: %d %s", res.Code, res.Body.String())
+	}
+	if store.orders["ORD-1"].Status != domain.StatusInProgress {
+		t.Fatalf("expected in-progress status, got %+v", store.orders["ORD-1"])
+	}
+	if len(store.allocations) != 1 || !store.allocations[0].Locked {
+		t.Fatalf("expected locked allocation, got %+v", store.allocations)
+	}
+}
+
+func TestPartialProductionCreatesPendingRemainderAndTrimsAllocation(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+	startProduction(t, server, schedulerA, "ORD-1")
+
+	body := bytes.NewBufferString(`{"orderId":"ORD-1","producedQuantity":1500}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/production/confirm", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("confirm production failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload productionConfirmResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode production response: %v", err)
+	}
+	if payload.Order.Status != domain.StatusCompleted || payload.Order.Quantity != 1500 {
+		t.Fatalf("expected completed original order with produced quantity, got %+v", payload.Order)
+	}
+	if payload.Remainder == nil || payload.Remainder.Quantity != 1000 || payload.Remainder.Status != domain.StatusPending || payload.Remainder.SourceOrder != "ORD-1" {
+		t.Fatalf("unexpected remainder: %+v", payload.Remainder)
+	}
+	if len(store.allocations) != 1 || store.allocations[0].Quantity != 1500 || !store.allocations[0].Locked {
+		t.Fatalf("expected trimmed locked allocation, got %+v", store.allocations)
+	}
+}
+
 func login(t *testing.T, server *Server, username, password string) string {
 	t.Helper()
 	body := bytes.NewBufferString(`{"username":"` + username + `","password":"` + password + `"}`)
@@ -421,6 +500,18 @@ func createOrderWithPriority(t *testing.T, server *Server, token, lineID, priori
 	server.ServeHTTP(res, req)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("create order failed: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func startProduction(t *testing.T, server *Server, token, orderID string) {
+	t.Helper()
+	body := bytes.NewBufferString(`{"orderId":"` + orderID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/production/start", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("start production failed: %d %s", res.Code, res.Body.String())
 	}
 }
 
