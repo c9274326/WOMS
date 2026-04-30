@@ -213,7 +213,7 @@ GitHub repository 需設定：
 - Variable: `DOCKERHUB_USERNAME`
 - Variable: `DOCKERHUB_NAMESPACE`
 
-Image tags 會包含 release tag、short SHA，以及 protected main/release publish flow 的 `latest`。`docker-publish` workflow 會把 release tag 回寫到 `deploy/helm/woms/values.yaml` 並用 `[skip ci]` commit，之後建立對應 Git tag。
+Image tags 會包含 release tag，以及 protected main/release publish flow 的 `latest`。`docker-publish` workflow 會把 release tag 回寫到 `deploy/helm/woms/values.yaml` 並用 `[skip ci]` commit，之後建立對應 Git tag。
 
 分支流程：
 
