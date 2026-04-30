@@ -213,7 +213,7 @@ Required GitHub repository settings:
 - Variable: `DOCKERHUB_USERNAME`
 - Variable: `DOCKERHUB_NAMESPACE`
 
-Image tags include the release tag, short SHA, and `latest` for the protected main/release publish flow. The `docker-publish` workflow commits the release tag back into `deploy/helm/woms/values.yaml` with `[skip ci]`, then creates the matching Git tag.
+Image tags include the release tag and `latest` for the protected main/release publish flow. The `docker-publish` workflow commits the release tag back into `deploy/helm/woms/values.yaml` with `[skip ci]`, then creates the matching Git tag.
 
 Branch workflow:
 

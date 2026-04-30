@@ -19,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.meta.outputs.release_tag }}
-      short_sha: ${{ steps.meta.outputs.short_sha }}
     steps:
       - name: Prepare release metadata
         id: meta
@@ -34,7 +33,6 @@ jobs:
             SAFE_REF="$(echo "${GITHUB_REF_NAME}" | tr '/_' '--' | tr -cd '[:alnum:].-')"
             RELEASE_TAG="${SAFE_REF}-${SHORT_SHA}"
           fi
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
   publish:
@@ -76,7 +74,6 @@ jobs:
           push: true
           tags: |
             docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare-release.outputs.release_tag }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare-release.outputs.short_sha }}
             docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}:latest
 
   update-helm-tag:
