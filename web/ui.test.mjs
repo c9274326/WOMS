@@ -127,11 +127,15 @@ test("waterlineMetrics summarizes daily capacity usage", () => {
   ]);
   assert.equal(metrics.total, 2500);
   assert.equal(metrics.capacity, 10000);
+  assert.equal(metrics.remaining, 7500);
+  assert.equal(metrics.overloaded, false);
   assert.equal(metrics.percent, 25);
   assert.match(metrics.color, /^hsl\(\d+ 88% 48%\)$/);
 
   const full = waterlineMetrics([{ quantity: 12000 }]);
   assert.equal(full.total, 12000);
+  assert.equal(full.remaining, 0);
+  assert.equal(full.overloaded, true);
   assert.equal(full.percent, 100);
   assert.equal(full.color, "hsl(0 88% 48%)");
 });

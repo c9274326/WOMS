@@ -8,7 +8,7 @@ WOMS 是晶圓訂單管理與排程系統，必須以最終部署型態開發：
 ### 分支與 Git 規則
 - 禁止直接在 `main` 開發。
 - 功能分支使用 `feat/xxxx-xxxx` 命名，例如 `feat/woms-foundation`。
-- PR 標題前綴使用 `[feat] xxxx`，不要使用 `[codex] xxxx`。
+- PR 標題與 commit message 前綴使用 `feat: xxxx`，不要使用 `[feat] xxxx` 或 `[codex] xxxx`。
 - `main` 必須存在並設定保護；所有功能都應透過 PR 進入 `main`，讓 CI bot 檢查。
 - Docker Hub publish 不應在 feature branch push 執行，只能在 `main`、`release/**` 或手動 workflow 執行。
 - 每完成一項功能都必須執行可用測試、更新 README、更新 `.gitignore`、`git add`、commit、push。
@@ -42,7 +42,7 @@ WOMS is a wafer order management and scheduling system. It must be built in the 
 ### Branch And Git Rules
 - Never develop directly on `main`.
 - Feature branches use `feat/xxxx-xxxx`, for example `feat/woms-foundation`.
-- PR titles use the `[feat] xxxx` prefix. Do not use `[codex] xxxx`.
+- PR titles and commit messages use the `feat: xxxx` prefix. Do not use `[feat] xxxx` or `[codex] xxxx`.
 - `main` must exist and be protected; all features should enter `main` through PRs so the CI bot can check them.
 - Docker Hub publishing must not run on feature branch pushes. It runs only on `main`, `release/**`, or manual workflow dispatch.
 - After every completed feature, run available tests, update README, update `.gitignore`, `git add`, commit, and push.

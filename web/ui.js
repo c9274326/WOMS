@@ -25,9 +25,12 @@ export function lineScopedOrders(orders, lineId) {
 export function waterlineMetrics(allocations, capacity = 10000) {
   const total = allocations.reduce((sum, allocation) => sum + Number(allocation.quantity ?? 0), 0);
   const ratio = capacity > 0 ? Math.min(total / capacity, 1) : 0;
+  const remaining = Math.max(capacity - total, 0);
   return {
     total,
     capacity,
+    remaining,
+    overloaded: total > capacity,
     ratio,
     percent: Math.round(ratio * 100),
     color: waterlineColor(ratio),

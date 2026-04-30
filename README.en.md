@@ -142,9 +142,9 @@ Frontend behavior:
 - The active production line selector defaults to the lexicographically lowest line for sales/admin users and locks to the assigned line for scheduler users.
 - Exact filters support customer and priority. Customer filtering uses a menu, while order status is controlled by the left status panel.
 - Status counts are scoped to the active production line.
-- Calendar days show a capacity waterline against the 10,000 wafer daily capacity; usage starts blue and shifts through orange to red as the day fills.
+- Calendar days show persisted schedule capacity only, with the remaining wafer capacity as the primary waterline value. Preview allocations stay on the preview confirmation page and do not change the main calendar.
 - Sales users can add customer orders to pending scheduling only; draft feasibility is checked against existing scheduled allocations, not all other pending orders.
-- Scheduler users must preview selected pending orders first, then confirm execution from the preview page. When conflicts exist, the preview page becomes a conflict-resolution page with explanations, start-date retry, and manual-force retry controls. Manual intervention requires a reason and explicit conflict acknowledgements before the job is accepted. Direct schedule-job creation without `previewId` is rejected.
+- Scheduler users must preview selected pending orders first, then confirm execution from the preview page. Scheduling starts from the selected start date and fills the earliest available capacity first. When conflicts exist, the preview page becomes a conflict-resolution page with explanations plus direct retry actions such as retrying from today, changing the start date, or using manual-force retry when allowed. Manual intervention requires a reason and explicit conflict acknowledgements before the job is accepted. Direct schedule-job creation without `previewId` is rejected.
 - Popup dialogs are used for warnings, permission failures, and operation results.
 - `scheduler-a` demo order `ORD-2` now has a persisted demo allocation, so it appears on the monthly calendar.
 - The conflict demo button creates several same-day orders so the preview can show a conflict report.

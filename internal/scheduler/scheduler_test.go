@@ -43,6 +43,33 @@ func TestPlanSplitsOrderAcrossDays(t *testing.T) {
 	}
 }
 
+func TestPlanUsesEarliestAvailableDatesBeforeDueDate(t *testing.T) {
+	result, err := Plan(Request{
+		LineID:         "A",
+		CapacityPerDay: 10000,
+		StartDate:      mustDate(t, "2026-04-30"),
+		Orders: []OrderInput{{
+			ID:       "ORD-EARLY",
+			LineID:   "A",
+			Quantity: 20000,
+			Priority: domain.PriorityLow,
+			DueDate:  mustDate(t, "2026-05-02"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(result.Allocations) != 2 {
+		t.Fatalf("expected 2 allocations, got %+v", result.Allocations)
+	}
+	if !result.Allocations[0].Date.Equal(mustDate(t, "2026-04-30")) || !result.Allocations[1].Date.Equal(mustDate(t, "2026-05-01")) {
+		t.Fatalf("expected earliest available dates before due date, got %+v", result.Allocations)
+	}
+	if !result.FinishDate.Equal(mustDate(t, "2026-05-01")) {
+		t.Fatalf("unexpected finish date: %s", result.FinishDate)
+	}
+}
+
 func TestPlanDoesNotMoveExistingHighPriorityAllocations(t *testing.T) {
 	result, err := Plan(Request{
 		LineID:         "A",

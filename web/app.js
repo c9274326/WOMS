@@ -37,9 +37,8 @@ const state = {
 
 const today = new Date();
 const due = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
-document.querySelectorAll('input[type="date"]').forEach((input) => {
-  input.value = due.toISOString().slice(0, 10);
-});
+document.querySelector('input[name="startDate"]').value = dateInputValue(today);
+document.querySelector('input[name="dueDate"]').value = dateInputValue(due);
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -81,7 +80,7 @@ document.getElementById("order-form").addEventListener("submit", async (event) =
     const draftOrder = orderFormData();
     const result = await createPreview({
       lineId: activeLine(),
-      startDate: draftOrder.dueDate,
+      startDate: dateInputValue(new Date()),
       draftOrder,
     }, "sales-draft");
     openPreviewPage(result);
@@ -240,6 +239,10 @@ document.getElementById("preview-page-list").addEventListener("click", async (ev
     if (action === "retry-start-date") {
       const startDate = document.getElementById("conflict-start-date").value;
       await retryPreview({ startDate, manualForce: false, reason: "" });
+      return;
+    }
+    if (action === "retry-today") {
+      await retryPreview({ startDate: dateInputValue(new Date()), manualForce: false, reason: "" });
       return;
     }
     if (action === "retry-manual-force") {
@@ -488,8 +491,7 @@ function renderCalendar() {
   const monthIndex = state.calendarDate.getMonth();
   document.getElementById("calendar-title").textContent = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
 
-  const previewAllocations = state.preview?.allocations ?? [];
-  const groups = groupAllocationsByDate([...state.calendarAllocations, ...previewAllocations.map((allocation) => ({ ...allocation, preview: true }))]);
+  const groups = groupAllocationsByDate(state.calendarAllocations);
   const grid = document.getElementById("calendar-grid");
   grid.innerHTML = "";
   for (const day of monthGrid(year, monthIndex)) {
@@ -619,6 +621,7 @@ function renderConflictActions(conflicts, manualForce) {
   }
   const canManualForce = conflictsCanBeManuallyForced(conflicts);
   const startDate = state.preview.request.startDate || new Date().toISOString().slice(0, 10);
+  const todayValue = dateInputValue(new Date());
   const manualForceControls = canManualForce && !manualForce ? `
     <label>
       <span>人工介入原因</span>
@@ -637,6 +640,7 @@ function renderConflictActions(conflicts, manualForce) {
         <input id="conflict-start-date" type="date" value="${escapeHtml(startDate)}">
       </label>
       <button data-preview-action="retry-start-date" type="button">用新開始日期重新試排</button>
+      ${startDate !== todayValue ? `<button data-preview-action="retry-today" type="button">改從今天重新試排</button>` : ""}
       ${manualForceControls}
       ${lockedNote}
       <button class="secondary-button" data-preview-action="return-workstation" type="button">回工作站調整訂單</button>
@@ -646,11 +650,13 @@ function renderConflictActions(conflicts, manualForce) {
 
 function renderWaterline(allocations) {
   const metrics = waterlineMetrics(allocations);
+  const remainingLabel = metrics.overloaded ? "已超載" : "剩餘";
+  const remainingValue = metrics.overloaded ? (metrics.total - metrics.capacity) : metrics.remaining;
   return `
-    <div class="waterline" title="${metrics.total}/${metrics.capacity}">
+    <div class="waterline" title="已排 ${metrics.total}/${metrics.capacity}，${remainingLabel} ${remainingValue}">
       <div class="waterline-meta">
-        <span>水位</span>
-        <strong>${metrics.total.toLocaleString()}/${metrics.capacity.toLocaleString()}</strong>
+        <span>${remainingLabel}</span>
+        <strong>${remainingValue.toLocaleString()} 片</strong>
       </div>
       <div class="waterline-track">
         <span style="width: ${metrics.percent}%; background: ${metrics.color};"></span>
@@ -815,6 +821,10 @@ function firstPreviewDate(allocations) {
 }
 
 function dateOnly(value) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function dateInputValue(value) {
   return new Date(value).toISOString().slice(0, 10);
 }
 
