@@ -1,4 +1,5 @@
 import {
+  conflictExplanation,
   defaultLine,
   escapeHtml,
   exactFilterOrders,
@@ -10,6 +11,7 @@ import {
   statusClass,
   statusCounts,
   uniqueValues,
+  waterlineMetrics,
 } from "./ui.js";
 
 const statuses = ["待排程", "已排程", "生產中", "已完成"];
@@ -225,6 +227,38 @@ document.getElementById("confirm-schedule-job").addEventListener("click", async 
 });
 
 document.getElementById("close-preview-page").addEventListener("click", closePreviewPage);
+document.getElementById("preview-page-list").addEventListener("click", async (event) => {
+  const action = event.target.dataset.previewAction;
+  if (!action || !state.preview) {
+    return;
+  }
+  if (action === "return-workstation") {
+    closePreviewPage();
+    return;
+  }
+  try {
+    if (action === "retry-start-date") {
+      const startDate = document.getElementById("conflict-start-date").value;
+      await retryPreview({ startDate, manualForce: false, reason: "" });
+      return;
+    }
+    if (action === "retry-manual-force") {
+      const conflicts = state.preview.conflicts ?? [];
+      if (!conflictsCanBeManuallyForced(conflicts)) {
+        showMessage("無法人工介入", "容量無法在交期前排完的衝突不能強制送出，請調整開始日期、交期或拆單。", "warn");
+        return;
+      }
+      const reason = document.getElementById("conflict-force-reason").value.trim();
+      if (!reason) {
+        showMessage("請填寫原因", "人工強制介入必須留下原因，才能重新試排。", "warn");
+        return;
+      }
+      await retryPreview({ manualForce: true, reason });
+    }
+  } catch (error) {
+    showMessage("重新試排失敗", error.message, "warn");
+  }
+});
 
 document.getElementById("prev-month").addEventListener("click", async () => {
   state.calendarDate.setMonth(state.calendarDate.getMonth() - 1);
@@ -467,6 +501,7 @@ function renderCalendar() {
         <span>${day.date.getUTCDate()}</span>
         <span>${allocations.length ? allocations.length : ""}</span>
       </div>
+      ${renderWaterline(allocations)}
       ${allocations.map(renderCalendarItem).join("")}
     `;
     grid.appendChild(cell);
@@ -514,8 +549,13 @@ function renderPreviewPage() {
   const allocations = state.preview?.allocations ?? [];
   const conflicts = state.preview?.conflicts ?? [];
   const manualForce = state.preview?.request?.manualForce ?? false;
+  const canConfirmSchedule = state.preview?.kind === "schedule"
+    && state.user?.role === "scheduler"
+    && (conflicts.length === 0 || (manualForce && conflictsCanBeManuallyForced(conflicts)));
+  document.getElementById("preview-page-title").textContent = conflicts.length > 0 ? "衝突處理" : "排程結果確認";
   pageList.innerHTML = [
     ...conflicts.map((conflict, index) => renderConflictItem(conflict, index, manualForce)),
+    renderConflictActions(conflicts, manualForce),
     ...allocations.map((allocation) => `
       <div class="preview-item ${priorityClass(allocation.priority)}">
         <strong>${escapeHtml(allocation.orderId)}</strong>
@@ -526,12 +566,15 @@ function renderPreviewPage() {
   ].join("") || "沒有可顯示的結果";
 
   document.getElementById("confirm-preview-order").hidden = state.preview?.kind !== "sales-draft";
-  document.getElementById("confirm-schedule-job").hidden = state.preview?.kind !== "schedule" || state.user?.role !== "scheduler";
+  document.getElementById("confirm-schedule-job").hidden = !canConfirmSchedule;
 
   const previewMonth = firstPreviewDate(allocations) ?? state.calendarDate;
   const year = previewMonth.getUTCFullYear();
   const monthIndex = previewMonth.getUTCMonth();
-  const groups = groupAllocationsByDate(allocations.map((allocation) => ({ ...allocation, preview: true })));
+  const groups = groupAllocationsByDate([
+    ...state.calendarAllocations,
+    ...allocations.map((allocation) => ({ ...allocation, preview: true })),
+  ]);
   const grid = document.getElementById("preview-calendar-grid");
   grid.innerHTML = "";
   for (const day of monthGrid(year, monthIndex)) {
@@ -543,6 +586,7 @@ function renderPreviewPage() {
         <span>${day.date.getUTCDate()}</span>
         <span>${dayAllocations.length ? dayAllocations.length : ""}</span>
       </div>
+      ${renderWaterline(dayAllocations)}
       ${dayAllocations.map(renderCalendarItem).join("")}
     `;
     grid.appendChild(cell);
@@ -562,8 +606,55 @@ function renderConflictItem(conflict, index = 0, withAcknowledgement = false) {
     <div class="preview-item high">
       <strong>${escapeHtml(conflict.orderId)}</strong>
       <span>${escapeHtml(conflict.reason)}</span>
+      <span>${escapeHtml(conflictExplanation(conflict))}</span>
       <span>最早完成：${dateOnly(conflict.earliestFinishDate)} · ${escapeHtml(affected)}</span>
       ${acknowledgement}
+    </div>
+  `;
+}
+
+function renderConflictActions(conflicts, manualForce) {
+  if (state.preview?.kind !== "schedule" || conflicts.length === 0) {
+    return "";
+  }
+  const canManualForce = conflictsCanBeManuallyForced(conflicts);
+  const startDate = state.preview.request.startDate || new Date().toISOString().slice(0, 10);
+  const manualForceControls = canManualForce && !manualForce ? `
+    <label>
+      <span>人工介入原因</span>
+      <input id="conflict-force-reason" value="${escapeHtml(state.preview.request.reason ?? "")}" placeholder="說明核准原因與影響處理方式">
+    </label>
+    <button data-preview-action="retry-manual-force" type="button">用人工強制介入重新試排</button>
+  ` : "";
+  const lockedNote = !canManualForce ? `
+    <p class="conflict-note">這類衝突代表交期前容量不足，不能用人工強制介入直接送出。</p>
+  ` : "";
+  return `
+    <div class="conflict-actions">
+      <h3>衝突修改</h3>
+      <label>
+        <span>調整開始日期</span>
+        <input id="conflict-start-date" type="date" value="${escapeHtml(startDate)}">
+      </label>
+      <button data-preview-action="retry-start-date" type="button">用新開始日期重新試排</button>
+      ${manualForceControls}
+      ${lockedNote}
+      <button class="secondary-button" data-preview-action="return-workstation" type="button">回工作站調整訂單</button>
+    </div>
+  `;
+}
+
+function renderWaterline(allocations) {
+  const metrics = waterlineMetrics(allocations);
+  return `
+    <div class="waterline" title="${metrics.total}/${metrics.capacity}">
+      <div class="waterline-meta">
+        <span>水位</span>
+        <strong>${metrics.total.toLocaleString()}/${metrics.capacity.toLocaleString()}</strong>
+      </div>
+      <div class="waterline-track">
+        <span style="width: ${metrics.percent}%; background: ${metrics.color};"></span>
+      </div>
     </div>
   `;
 }
@@ -596,6 +687,15 @@ function orderFormData() {
   data.lineId = activeLine();
   data.quantity = Number(data.quantity);
   return data;
+}
+
+async function retryPreview(overrides) {
+  const request = {
+    ...state.preview.request,
+    ...overrides,
+  };
+  const result = await createPreview(request, state.preview.kind);
+  openPreviewPage(result);
 }
 
 async function request(path, options = {}, needsAuth = true) {
