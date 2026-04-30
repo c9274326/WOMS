@@ -77,6 +77,7 @@ document.getElementById("active-line-select").addEventListener("change", async (
   syncLineInputs();
   renderWorkspace();
   await loadCalendar();
+  await loadScheduleHistory();
 });
 
 document.getElementById("order-form").addEventListener("submit", async (event) => {
@@ -217,7 +218,6 @@ document.getElementById("confirm-preview-order").addEventListener("click", async
       body: JSON.stringify({ previewId: state.preview.previewId }),
     });
     closePreviewPage();
-    addScheduleHistory("新增待排程", "Sales 訂單已加入待排程。");
     showMessage("已加入待排程", "新訂單已正式放入待排程訂單。");
     await refreshWorkspace();
   } catch (error) {
@@ -256,7 +256,6 @@ document.getElementById("confirm-schedule-job").addEventListener("click", async 
     const scheduledCount = scheduledOrderIds.length;
     closePreviewPage();
     scheduledOrderIds.forEach((orderId) => state.selectedOrderIds.delete(orderId));
-    addScheduleHistory("排程成功", `${scheduledCount} 張訂單已接受排程結果。`);
     showMessage("排程完成", `任務 ${payload.id} 已完成，日曆已更新。`);
     await refreshWorkspace();
   } catch (error) {
@@ -366,6 +365,7 @@ if (state.token) {
 async function refreshWorkspace() {
   await loadOrders();
   await loadCalendar();
+  await loadScheduleHistory();
   if (state.user?.role === "admin") {
     await loadUsers();
   }
@@ -413,6 +413,18 @@ async function loadCalendar() {
   renderCalendar();
 }
 
+async function loadScheduleHistory() {
+  if (!state.token || state.user?.role !== "scheduler") {
+    state.scheduleHistory = [];
+    renderScheduleHistory();
+    return;
+  }
+  const lineId = activeLine();
+  const payload = await request(`/api/schedules/history?lineId=${encodeURIComponent(lineId)}`);
+  state.scheduleHistory = payload.history ?? [];
+  renderScheduleHistory();
+}
+
 async function createPreview(requestData, kind) {
   const result = await request("/api/schedules/preview", {
     method: "POST",
@@ -436,6 +448,7 @@ async function createPreview(requestData, kind) {
 
 function renderAuthState() {
   const loggedIn = Boolean(state.token && state.user);
+  document.body.dataset.role = state.user?.role ?? "";
   document.getElementById("login-page").hidden = loggedIn;
   document.getElementById("app-shell").hidden = !loggedIn;
   document.getElementById("admin-panel").hidden = state.user?.role !== "admin";
@@ -446,6 +459,10 @@ function renderAuthState() {
   document.querySelectorAll(".scheduler-only").forEach((node) => {
     node.hidden = state.user?.role !== "scheduler";
   });
+  if (state.user?.role !== "scheduler" && state.mobileView === "actions") {
+    state.mobileView = "orders";
+    renderMobileView();
+  }
   document.getElementById("active-line-select").disabled = state.user?.role === "scheduler";
   if (loggedIn) {
     document.getElementById("session-greeting").textContent = `您好 ${state.user.username}`;
@@ -703,7 +720,7 @@ function renderPreviewSummary() {
   const preview = document.getElementById("preview-page-list");
   if (!state.preview) {
     preview.textContent = "尚未試排";
-    document.getElementById("preview-page-title").textContent = state.productionOrderId ? "回報生產" : "試排與任務";
+    document.getElementById("preview-page-title").textContent = "試排與任務";
     document.getElementById("confirm-preview-order").hidden = true;
     document.getElementById("confirm-schedule-job").hidden = true;
     document.getElementById("close-preview-page").hidden = true;
@@ -876,8 +893,8 @@ function renderOrderAction(order) {
           <input data-resubmit-field="quantity" type="number" min="25" max="2500" step="25" value="${order.quantity}">
         </label>
         <label>
-          <span>備註</span>
-          <textarea data-resubmit-field="note" maxlength="120" rows="2">${escapeHtml(order.note ?? "")}</textarea>
+          <span>原備註</span>
+          <span class="drawer-note">${escapeHtml(order.note || "未填寫")}</span>
         </label>
         <button class="row-action" data-order-action="resubmit-order" data-order-id="${escapeHtml(order.id)}" type="button">重新送出</button>
         <button class="row-action danger-button" data-order-action="delete-order" data-order-id="${escapeHtml(order.id)}" type="button">刪除訂單</button>
@@ -905,10 +922,9 @@ async function handleOrderAction(action, orderId) {
       const card = document.querySelector(`[data-order-id="${cssEscape(orderId)}"]`);
       const dueDate = card?.querySelector('[data-resubmit-field="dueDate"]')?.value;
       const quantity = Number(card?.querySelector('[data-resubmit-field="quantity"]')?.value);
-      const note = card?.querySelector('[data-resubmit-field="note"]')?.value ?? "";
       await request("/api/orders/resubmit", {
         method: "POST",
-        body: JSON.stringify({ orderId, dueDate, quantity, note }),
+        body: JSON.stringify({ orderId, dueDate, quantity }),
       });
       showMessage("已重新送出", `${orderId} 已回到待排程。`);
       await refreshWorkspace();
@@ -993,45 +1009,35 @@ function openProductionReport(order) {
     showMessage("找不到訂單", "請重新整理後再試一次。", "warn");
     return;
   }
-  closePreviewPage();
   state.productionOrderId = order.id;
   state.mobileView = "actions";
   renderMobileView();
   const form = document.getElementById("production-form");
-  form.hidden = false;
   form.elements.orderId.value = order.id;
   form.elements.producedQuantity.value = order.quantity;
   form.elements.producedQuantity.max = order.quantity;
-  document.getElementById("preview-page-title").textContent = "回報生產";
   document.getElementById("production-title").textContent = `回報 ${order.id}`;
   document.getElementById("production-context").textContent = `總量 ${order.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於總量。`;
-  document.getElementById("preview-page-list").textContent = "輸入完成片數後送出；若未全數完成，剩餘量會建立為待排程子訂單。";
+  const dialog = document.getElementById("production-dialog");
+  if (typeof dialog.showModal === "function" && !dialog.open) {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
 }
 
 function closeProductionReport() {
   state.productionOrderId = "";
   const form = document.getElementById("production-form");
   if (form) {
-    form.hidden = true;
     form.reset();
   }
-  if (!state.preview) {
-    renderPreviewSummary();
+  const dialog = document.getElementById("production-dialog");
+  if (dialog?.open && typeof dialog.close === "function") {
+    dialog.close();
+  } else {
+    dialog?.removeAttribute("open");
   }
-}
-
-function renderActionResult(title, body) {
-  closeProductionReport();
-  document.getElementById("preview-page-title").textContent = title;
-  document.getElementById("preview-page-list").innerHTML = `
-    <div class="preview-item">
-      <strong>${escapeHtml(title)}</strong>
-      <span>${escapeHtml(body)}</span>
-    </div>
-  `;
-  document.getElementById("confirm-preview-order").hidden = true;
-  document.getElementById("confirm-schedule-job").hidden = true;
-  document.getElementById("close-preview-page").hidden = false;
 }
 
 async function submitProductionReport(orderId, producedQuantity) {
@@ -1095,16 +1101,6 @@ function renderMobileView() {
   });
 }
 
-function addScheduleHistory(title, body) {
-  state.scheduleHistory.unshift({
-    title,
-    body,
-    time: new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" }),
-  });
-  state.scheduleHistory = state.scheduleHistory.slice(0, 12);
-  renderScheduleHistory();
-}
-
 function renderScheduleHistory() {
   const list = document.getElementById("schedule-history-list");
   if (!list) {
@@ -1116,11 +1112,27 @@ function renderScheduleHistory() {
   }
   list.innerHTML = state.scheduleHistory.map((item) => `
     <div class="preview-item">
-      <strong>${escapeHtml(item.title)}</strong>
-      <span>${escapeHtml(item.body)}</span>
-      <span>${escapeHtml(item.time)}</span>
+      <strong>${escapeHtml(scheduleHistoryTitle(item.action))}</strong>
+      <span>${escapeHtml(scheduleHistoryBody(item))}</span>
+      <span>${escapeHtml(formatDateTime(item.createdAt))}</span>
     </div>
   `).join("");
+}
+
+function scheduleHistoryTitle(action) {
+  return {
+    "schedule.job.create": "排程成功",
+    "schedule.job.manual_force": "人工介入",
+    "order.reject": "延後處理紀錄",
+    "production.start": "開始生產",
+    "production.confirm.complete": "生產回報",
+    "production.confirm.partial": "生產回報",
+  }[action] ?? action;
+}
+
+function scheduleHistoryBody(item) {
+  const reason = item.reason ? `：${item.reason}` : "";
+  return `${item.resource}${reason}`;
 }
 
 function openRejectDialog(orderIds) {
@@ -1154,7 +1166,6 @@ async function submitRejectOrders() {
     const rejectedCount = payload.orders?.length ?? 0;
     state.rejectOrderIds.forEach((orderId) => state.selectedOrderIds.delete(orderId));
     closePreviewPage();
-    addScheduleHistory("衝突延後處理", `${rejectedCount} 張訂單已駁回給 Sales：${reason}`);
     showMessage("已駁回訂單", `${rejectedCount} 張訂單已移交 Sales 處理。`);
     await refreshWorkspace();
   } catch (error) {
@@ -1306,6 +1317,15 @@ function firstPreviewDate(allocations) {
 
 function dateOnly(value) {
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function formatDateTime(value) {
+  return new Date(value).toLocaleString("zh-TW", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function dateInputValue(value) {

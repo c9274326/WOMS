@@ -413,6 +413,34 @@ func TestSchedulerCanUpdatePendingOrderDueDate(t *testing.T) {
 	}
 }
 
+func TestOrderNoteCannotBeUpdatedAfterCreate(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03","note":"original sales note"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create order failed: %d %s", res.Code, res.Body.String())
+	}
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	body = bytes.NewBufferString(`{"dueDate":"2026-05-06","note":"scheduler changed note"}`)
+	req = httptest.NewRequest(http.MethodPatch, "/api/orders/ORD-1", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected note update rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+	if store.orders["ORD-1"].Note != "original sales note" || store.orders["ORD-1"].DueDate.Format("2006-01-02") != "2026-05-03" {
+		t.Fatalf("order should remain unchanged, got %+v", store.orders["ORD-1"])
+	}
+}
+
 func TestStartProductionLocksScheduledAllocations(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer("secret", store)
@@ -526,7 +554,7 @@ func TestSchedulerRejectsPendingOrdersAndSalesCanResubmit(t *testing.T) {
 		t.Fatalf("rejected order should be hidden from scheduler pending queue: %s", res.Body.String())
 	}
 
-	body = bytes.NewBufferString(`{"orderId":"ORD-1","dueDate":"2026-05-05","quantity":2000,"note":"customer agreed to smaller first batch"}`)
+	body = bytes.NewBufferString(`{"orderId":"ORD-1","dueDate":"2026-05-05","quantity":2000}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/orders/resubmit", body)
 	req.Header.Set("Authorization", "Bearer "+salesToken)
 	res = httptest.NewRecorder()
@@ -537,8 +565,87 @@ func TestSchedulerRejectsPendingOrdersAndSalesCanResubmit(t *testing.T) {
 	if store.orders["ORD-1"].Status != domain.StatusPending || store.orders["ORD-1"].RejectionReason != "" {
 		t.Fatalf("expected resubmitted pending order, got %+v", store.orders["ORD-1"])
 	}
-	if store.orders["ORD-1"].Quantity != 2000 || store.orders["ORD-1"].Note != "customer agreed to smaller first batch" {
+	if store.orders["ORD-1"].Quantity != 2000 || store.orders["ORD-1"].Note != "customer can accept split delivery" {
 		t.Fatalf("expected sales edits to persist, got %+v", store.orders["ORD-1"])
+	}
+}
+
+func TestSalesCannotChangeNoteDuringResubmit(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03","note":"original sales note"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create order failed: %d %s", res.Code, res.Body.String())
+	}
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	body = bytes.NewBufferString(`{"orderIds":["ORD-1"],"reason":"capacity unavailable before due date"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders/reject", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("reject failed: %d %s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"orderId":"ORD-1","dueDate":"2026-05-05","quantity":2000,"note":"changed note"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders/resubmit", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected note update rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+	if store.orders["ORD-1"].Note != "original sales note" || store.orders["ORD-1"].Status != domain.StatusRejected {
+		t.Fatalf("order should remain rejected with original note, got %+v", store.orders["ORD-1"])
+	}
+}
+
+func TestScheduleHistoryReturnsWorkflowAuditsForSchedulerLine(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	createOrder(t, server, salesToken, "B")
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+	startProduction(t, server, schedulerA, "ORD-1")
+
+	schedulerB := login(t, server, "scheduler-b", "demo")
+	createScheduleJob(t, server, schedulerB, "B")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/schedules/history", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("history failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		History []domain.AuditEntry `json:"history"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode history response: %v", err)
+	}
+	actions := []string{}
+	for _, entry := range payload.History {
+		actions = append(actions, entry.Action)
+		if entry.Resource == "JOB-2" {
+			t.Fatalf("scheduler A should not see line B job history: %+v", payload.History)
+		}
+		if entry.Action == "order.create" {
+			t.Fatalf("history should exclude non-workflow audits: %+v", payload.History)
+		}
+	}
+	if !contains(actions, "schedule.job.create") || !contains(actions, "production.start") {
+		t.Fatalf("expected scheduler workflow actions, got %+v", actions)
 	}
 }
 
@@ -626,4 +733,13 @@ func createSchedulePreview(t *testing.T, server *Server, token, lineID string) s
 		t.Fatalf("decode preview response: %v", err)
 	}
 	return payload.PreviewID
+}
+
+func contains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
