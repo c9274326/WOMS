@@ -15,7 +15,7 @@ import {
   waterlineMetrics,
 } from "./ui.js";
 
-const statuses = ["待排程", "已排程", "生產中", "已完成"];
+const statuses = ["待排程", "已排程", "生產中", "已完成", "需業務處理"];
 const lines = ["A", "B", "C", "D"];
 const priorities = ["low", "high"];
 
@@ -26,7 +26,11 @@ const state = {
   orders: [],
   calendarAllocations: [],
   preview: null,
+  productionOrderId: "",
+  scheduleHistory: [],
+  rejectOrderIds: [],
   selectedOrderIds: new Set(),
+  mobileView: "orders",
   selectedLine: localStorage.getItem("woms.selectedLine") || defaultLine(lines),
   filters: {
     customers: new Set(),
@@ -84,7 +88,7 @@ document.getElementById("order-form").addEventListener("submit", async (event) =
       startDate: dateInputValue(new Date()),
       draftOrder,
     }, "sales-draft");
-    openPreviewPage(result);
+    openPreviewDialog(result);
   } catch (error) {
     showMessage("無法加入待排程", error.message, "warn");
   }
@@ -113,10 +117,18 @@ document.getElementById("preview-selected").addEventListener("click", async () =
   try {
     const data = scheduleFormData();
     const result = await createPreview(data, "schedule");
-    openPreviewPage(result);
+    openPreviewDialog(result);
   } catch (error) {
     showMessage("試排失敗", error.message, "warn");
   }
+});
+
+document.getElementById("reject-selected").addEventListener("click", () => {
+  if (state.selectedOrderIds.size === 0) {
+    showMessage("請先選取訂單", "至少選取一張待排程訂單再駁回。", "warn");
+    return;
+  }
+  openRejectDialog(Array.from(state.selectedOrderIds));
 });
 
 document.getElementById("delete-selected").addEventListener("click", async () => {
@@ -150,10 +162,31 @@ document.getElementById("schedule-form").addEventListener("submit", async (event
   try {
     const data = scheduleFormData();
     const result = await createPreview(data, "schedule");
-    openPreviewPage(result);
+    openPreviewDialog(result);
   } catch (error) {
     showMessage("試排失敗", error.message, "warn");
   }
+});
+
+document.getElementById("production-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = Object.fromEntries(new FormData(event.currentTarget));
+  await submitProductionReport(form.orderId, Number(form.producedQuantity));
+});
+
+document.getElementById("cancel-production-report").addEventListener("click", () => {
+  closeProductionReport();
+});
+
+document.getElementById("confirm-reject-orders").addEventListener("click", async () => {
+  await submitRejectOrders();
+});
+
+document.querySelectorAll("[data-mobile-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.mobileView = button.dataset.mobileView;
+    renderMobileView();
+  });
 });
 
 document.getElementById("create-conflict-demo").addEventListener("click", async () => {
@@ -184,6 +217,7 @@ document.getElementById("confirm-preview-order").addEventListener("click", async
       body: JSON.stringify({ previewId: state.preview.previewId }),
     });
     closePreviewPage();
+    addScheduleHistory("新增待排程", "Sales 訂單已加入待排程。");
     showMessage("已加入待排程", "新訂單已正式放入待排程訂單。");
     await refreshWorkspace();
   } catch (error) {
@@ -218,7 +252,11 @@ document.getElementById("confirm-schedule-job").addEventListener("click", async 
       showMessage("排程未完成", payload.message ?? "排程任務失敗。", "warn");
       return;
     }
+    const scheduledOrderIds = state.preview.request.orderIds;
+    const scheduledCount = scheduledOrderIds.length;
     closePreviewPage();
+    scheduledOrderIds.forEach((orderId) => state.selectedOrderIds.delete(orderId));
+    addScheduleHistory("排程成功", `${scheduledCount} 張訂單已接受排程結果。`);
     showMessage("排程完成", `任務 ${payload.id} 已完成，日曆已更新。`);
     await refreshWorkspace();
   } catch (error) {
@@ -260,6 +298,24 @@ document.getElementById("preview-page-list").addEventListener("click", async (ev
       await updateOrderDueDate(orderId, input.value);
       await loadOrders();
       await retryPreview({});
+      return;
+    }
+    if (action === "unselect-conflict-order") {
+      const orderId = event.target.dataset.orderId;
+      state.selectedOrderIds.delete(orderId);
+      const orderIds = state.preview.request.orderIds.filter((id) => id !== orderId);
+      if (orderIds.length === 0) {
+        closePreviewPage();
+        renderOrders();
+        showMessage("已取消選取", "沒有剩餘訂單可試排。");
+        return;
+      }
+      await retryPreview({ orderIds });
+      renderOrders();
+      return;
+    }
+    if (action === "reject-preview-orders") {
+      openRejectDialog(state.preview.request.orderIds);
       return;
     }
     if (action === "retry-manual-force") {
@@ -318,11 +374,14 @@ async function refreshWorkspace() {
 
 function renderWorkspace() {
   syncLineInputs();
+  renderMobileView();
   renderFilters();
   renderStatusSidebar();
   renderOrders();
+  renderSalesRejectedOrders();
   renderCalendar();
   renderPreviewSummary();
+  renderScheduleHistory();
 }
 
 async function loadOrders() {
@@ -332,6 +391,7 @@ async function loadOrders() {
   renderFilters();
   renderStatusSidebar();
   renderOrders();
+  renderSalesRejectedOrders();
 }
 
 async function loadUsers() {
@@ -380,6 +440,7 @@ function renderAuthState() {
   document.getElementById("app-shell").hidden = !loggedIn;
   document.getElementById("admin-panel").hidden = state.user?.role !== "admin";
   document.getElementById("order-form").hidden = state.user?.role !== "sales";
+  document.getElementById("sales-rejected-panel").hidden = state.user?.role !== "sales";
   document.getElementById("scheduler-panel").hidden = state.user?.role !== "scheduler";
   document.getElementById("batch-bar").hidden = state.user?.role !== "scheduler";
   document.querySelectorAll(".scheduler-only").forEach((node) => {
@@ -390,6 +451,7 @@ function renderAuthState() {
     document.getElementById("session-greeting").textContent = `您好 ${state.user.username}`;
   } else {
     closePreviewPage();
+    closeProductionReport();
   }
 }
 
@@ -401,46 +463,103 @@ function renderUsers() {
 }
 
 function renderOrders() {
-  const filtered = sortOrdersForWorkstation(exactFilterOrders(visibleLineOrders(), state.filters));
+  const visibleOrders = state.user?.role === "sales"
+    ? visibleLineOrders().filter((order) => order.status !== "需業務處理")
+    : visibleLineOrders();
+  const filtered = sortOrdersForWorkstation(exactFilterOrders(visibleOrders, state.filters));
   const body = document.getElementById("orders-body");
-  const showSelection = state.user?.role === "scheduler";
   body.innerHTML = "";
   for (const order of filtered) {
-    const row = document.createElement("tr");
-    row.draggable = state.user?.role === "scheduler" && order.status === "待排程";
-    row.dataset.orderId = order.id;
-    row.innerHTML = `
-      <td class="select-cell scheduler-only" ${showSelection ? "" : "hidden"}><input type="checkbox" data-order-id="${escapeHtml(order.id)}" ${state.selectedOrderIds.has(order.id) ? "checked" : ""} ${order.status === "待排程" ? "" : "disabled"}></td>
-      <td>${escapeHtml(order.id)}</td>
-      <td>${escapeHtml(order.customer)}</td>
-      <td>${escapeHtml(order.lineId)}</td>
-      <td class="numeric">${order.quantity.toLocaleString()}</td>
-      <td><span class="tag ${priorityClass(order.priority)}">${priorityLabel(order.priority)}</span></td>
-      <td><span class="tag ${statusClass(order.status)}">${escapeHtml(order.status)}</span></td>
-      <td>${dateOnly(order.dueDate)}${renderOrderAction(order)}</td>
-    `;
-    body.appendChild(row);
+    body.appendChild(renderOrderCard(order));
   }
-  body.querySelectorAll("tr[draggable='true']").forEach((row) => {
-    row.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("text/plain", row.dataset.orderId);
-      event.dataTransfer.effectAllowed = "move";
-    });
-  });
-  body.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) {
-        state.selectedOrderIds.add(checkbox.dataset.orderId);
-      } else {
-        state.selectedOrderIds.delete(checkbox.dataset.orderId);
-      }
-      updateSelectedCount();
-    });
-  });
   body.querySelectorAll("[data-order-action]").forEach((button) => {
-    button.addEventListener("click", () => handleOrderAction(button.dataset.orderAction, button.dataset.orderId));
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      handleOrderAction(button.dataset.orderAction, button.dataset.orderId);
+    });
   });
   updateSelectedCount();
+}
+
+function renderOrderCard(order) {
+  const selected = state.selectedOrderIds.has(order.id);
+  const selectable = state.user?.role === "scheduler" && order.status === "待排程";
+  const card = document.createElement("article");
+  card.className = `order-card ${selectable ? "selectable" : ""} ${selected ? "selected" : ""}`;
+  card.dataset.orderId = order.id;
+  card.draggable = selectable;
+  card.innerHTML = `
+    <div class="order-card-main">
+      <div>
+        <strong>${escapeHtml(order.id)}</strong>
+        <span>${escapeHtml(order.customer)}</span>
+      </div>
+      <span class="tag ${statusClass(order.status)}">${escapeHtml(order.status)}</span>
+    </div>
+    <dl class="order-card-meta">
+      <div><dt>數量</dt><dd>${order.quantity.toLocaleString()} 片</dd></div>
+      <div><dt>交期</dt><dd>${dateOnly(order.dueDate)}</dd></div>
+      <div><dt>產線</dt><dd>${escapeHtml(order.lineId)}</dd></div>
+      <div><dt>優先級</dt><dd><span class="tag ${priorityClass(order.priority)}">${priorityLabel(order.priority)}</span></dd></div>
+    </dl>
+    ${order.note ? `<p class="order-note" title="${escapeHtml(order.note)}">備註：${escapeHtml(order.note)}</p>` : ""}
+    ${order.rejectionReason ? `<p class="rejection-reason">駁回：${escapeHtml(order.rejectionReason)}</p>` : ""}
+    ${renderOrderAction(order)}
+  `;
+  if (selectable) {
+    card.addEventListener("click", () => toggleSelectedOrder(order.id));
+    card.addEventListener("dragstart", (event) => {
+      const orderIds = draggedOrderIds(order.id);
+      event.dataTransfer.setData("application/json", JSON.stringify({ orderIds }));
+      event.dataTransfer.setData("text/plain", orderIds.join(","));
+      event.dataTransfer.effectAllowed = "move";
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      clearCalendarDropTargets();
+    });
+  }
+  return card;
+}
+
+function renderSalesRejectedOrders() {
+  const list = document.getElementById("sales-rejected-list");
+  if (!list) {
+    return;
+  }
+  const rejected = state.user?.role === "sales" ? state.orders.filter((order) => order.status === "需業務處理") : [];
+  list.innerHTML = "";
+  for (const order of rejected) {
+    list.appendChild(renderOrderCard(order));
+  }
+  list.querySelectorAll("[data-order-action]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      handleOrderAction(button.dataset.orderAction, button.dataset.orderId);
+    });
+  });
+  document.getElementById("sales-rejected-panel").hidden = state.user?.role !== "sales" || rejected.length === 0;
+}
+
+function draggedOrderIds(orderId) {
+  const selected = Array.from(state.selectedOrderIds).filter((id) => {
+    const order = state.orders.find((item) => item.id === id);
+    return order?.status === "待排程";
+  });
+  if (selected.includes(orderId)) {
+    return selected;
+  }
+  return [orderId];
+}
+
+function toggleSelectedOrder(orderId) {
+  if (state.selectedOrderIds.has(orderId)) {
+    state.selectedOrderIds.delete(orderId);
+  } else {
+    state.selectedOrderIds.add(orderId);
+  }
+  renderOrders();
 }
 
 function renderFilters() {
@@ -519,7 +638,8 @@ function renderCalendar() {
   const monthIndex = state.calendarDate.getMonth();
   document.getElementById("calendar-title").textContent = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
 
-  const groups = groupAllocationsByDate(state.calendarAllocations);
+  const previewAllocations = state.preview?.allocations?.map((allocation) => ({ ...allocation, preview: true })) ?? [];
+  const groups = groupAllocationsByDate([...state.calendarAllocations, ...previewAllocations]);
   const grid = document.getElementById("calendar-grid");
   grid.innerHTML = "";
   for (const day of monthGrid(year, monthIndex)) {
@@ -538,53 +658,88 @@ function renderCalendar() {
     cell.addEventListener("dragover", (event) => {
       if (state.user?.role === "scheduler" && day.inMonth) {
         event.preventDefault();
+        cell.classList.add("drop-target");
+      }
+    });
+    cell.addEventListener("dragleave", (event) => {
+      if (!cell.contains(event.relatedTarget)) {
+        cell.classList.remove("drop-target");
       }
     });
     cell.addEventListener("drop", async (event) => {
       event.preventDefault();
-      const orderId = event.dataTransfer.getData("text/plain");
-      if (orderId && day.inMonth) {
-        await scheduleDroppedOrder(orderId, day.key);
+      cell.classList.remove("drop-target");
+      const orderIds = droppedOrderIds(event.dataTransfer);
+      if (orderIds.length > 0 && day.inMonth) {
+        await scheduleDroppedOrders(orderIds, day.key);
       }
     });
     grid.appendChild(cell);
   }
 }
 
-function renderPreviewSummary() {
-  const preview = document.getElementById("preview-list");
-  if (!state.preview) {
-    preview.textContent = "尚未試排";
-    return;
+function droppedOrderIds(dataTransfer) {
+  const payload = dataTransfer.getData("application/json");
+  if (payload) {
+    try {
+      const parsed = JSON.parse(payload);
+      if (Array.isArray(parsed.orderIds)) {
+        return parsed.orderIds.filter(Boolean);
+      }
+    } catch {
+      return [];
+    }
   }
-  const allocations = state.preview.allocations ?? [];
-  const conflicts = state.preview.conflicts ?? [];
-  if (allocations.length === 0 && conflicts.length === 0) {
-    preview.textContent = "沒有可顯示的結果";
-    return;
-  }
-  preview.innerHTML = [
-    `<div class="preview-item"><strong>${escapeHtml(state.preview.previewId)}</strong><span>點開確認頁查看日曆高亮與確認動作</span></div>`,
-    ...conflicts.map((conflict) => renderConflictItem(conflict)),
-  ].join("");
+  return dataTransfer.getData("text/plain").split(",").map((id) => id.trim()).filter(Boolean);
 }
 
-function openPreviewPage(preview) {
+function clearCalendarDropTargets() {
+  document.querySelectorAll(".calendar-day.drop-target").forEach((cell) => {
+    cell.classList.remove("drop-target");
+  });
+}
+
+function renderPreviewSummary() {
+  const preview = document.getElementById("preview-page-list");
+  if (!state.preview) {
+    preview.textContent = "尚未試排";
+    document.getElementById("preview-page-title").textContent = state.productionOrderId ? "回報生產" : "試排與任務";
+    document.getElementById("confirm-preview-order").hidden = true;
+    document.getElementById("confirm-schedule-job").hidden = true;
+    document.getElementById("close-preview-page").hidden = true;
+    return;
+  }
+  renderPreviewPage();
+}
+
+function openPreviewDialog(preview) {
   state.preview = preview;
-  const page = document.getElementById("preview-page");
-  document.querySelector("main.layout").hidden = true;
-  page.hidden = false;
+  closeProductionReport();
   renderPreviewPage();
   renderPreviewSummary();
   renderCalendar();
+  const dialog = document.getElementById("schedule-preview-dialog");
+  if (typeof dialog.showModal === "function" && !dialog.open) {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+}
+
+function openPreviewPage(preview) {
+  openPreviewDialog(preview);
 }
 
 function closePreviewPage() {
-  document.getElementById("preview-page").hidden = true;
-  const layout = document.querySelector("main.layout");
-  if (layout) {
-    layout.hidden = false;
+  const dialog = document.getElementById("schedule-preview-dialog");
+  if (dialog?.open && typeof dialog.close === "function") {
+    dialog.close();
+  } else {
+    dialog?.removeAttribute("open");
   }
+  state.preview = null;
+  renderPreviewSummary();
+  renderCalendar();
 }
 
 function renderPreviewPage() {
@@ -596,6 +751,7 @@ function renderPreviewPage() {
     && state.user?.role === "scheduler"
     && (conflicts.length === 0 || (manualForce && conflictsCanBeManuallyForced(conflicts)));
   document.getElementById("preview-page-title").textContent = conflicts.length > 0 ? "衝突處理" : "排程結果確認";
+  document.getElementById("close-preview-page").hidden = false;
   pageList.innerHTML = [
     ...conflicts.map((conflict, index) => renderConflictItem(conflict, index, manualForce)),
     renderConflictActions(conflicts, manualForce),
@@ -610,7 +766,10 @@ function renderPreviewPage() {
 
   document.getElementById("confirm-preview-order").hidden = state.preview?.kind !== "sales-draft";
   document.getElementById("confirm-schedule-job").hidden = !canConfirmSchedule;
+  renderPreviewCalendar(allocations);
+}
 
+function renderPreviewCalendar(allocations) {
   const previewMonth = firstPreviewDate(allocations) ?? state.calendarDate;
   const year = previewMonth.getUTCFullYear();
   const monthIndex = previewMonth.getUTCMonth();
@@ -623,7 +782,7 @@ function renderPreviewPage() {
   for (const day of monthGrid(year, monthIndex)) {
     const dayAllocations = groups[day.key] ?? [];
     const cell = document.createElement("div");
-    cell.className = `calendar-day ${day.inMonth ? "" : "outside"} ${dayAllocations.length ? "preview-highlight" : ""}`;
+    cell.className = `calendar-day ${day.inMonth ? "" : "outside"} ${dayAllocations.some((item) => item.preview) ? "preview-highlight" : ""}`;
     cell.innerHTML = `
       <div class="calendar-day-number">
         <span>${day.date.getUTCDate()}</span>
@@ -638,6 +797,7 @@ function renderPreviewPage() {
 
 function renderConflictItem(conflict, index = 0, withAcknowledgement = false) {
   const affected = conflict.affectedOrderIds?.length ? `影響：${conflict.affectedOrderIds.join(", ")}` : "無已知受影響訂單";
+  const finishDate = dateOnly(conflict.earliestFinishDate);
   const canAcknowledge = withAcknowledgement && conflict.reason === "existing allocations require manual review or reschedule";
   const acknowledgement = canAcknowledge ? `
     <label class="check-option conflict-ack">
@@ -648,9 +808,10 @@ function renderConflictItem(conflict, index = 0, withAcknowledgement = false) {
   return `
     <div class="preview-item high">
       <strong>${escapeHtml(conflict.orderId)}</strong>
-      <span>${escapeHtml(conflict.reason)}</span>
       <span>${escapeHtml(conflictExplanation(conflict))}</span>
-      <span>最早完成：${dateOnly(conflict.earliestFinishDate)} · ${escapeHtml(affected)}</span>
+      <span>最早完成：${finishDate}。至少需延後交期至 ${finishDate} 或取消選取。</span>
+      <span>${escapeHtml(affected)}</span>
+      <button class="secondary-button" data-preview-action="unselect-conflict-order" data-order-id="${escapeHtml(conflict.orderId)}" type="button">取消選取 ${escapeHtml(conflict.orderId)}</button>
       ${acknowledgement}
     </div>
   `;
@@ -660,33 +821,18 @@ function renderConflictActions(conflicts, manualForce) {
   if (state.preview?.kind !== "schedule" || conflicts.length === 0) {
     return "";
   }
-  const canManualForce = conflictsCanBeManuallyForced(conflicts);
   const startDate = state.preview.request.startDate || new Date().toISOString().slice(0, 10);
-  const todayValue = dateInputValue(new Date());
-  const suggestedStart = suggestedStartDate(state.preview);
-  const manualForceControls = canManualForce && !manualForce ? `
-    <label>
-      <span>人工介入原因</span>
-      <input id="conflict-force-reason" value="${escapeHtml(state.preview.request.reason ?? "")}" placeholder="說明核准原因與影響處理方式">
-    </label>
-    <button data-preview-action="retry-manual-force" type="button">用人工強制介入重新試排</button>
-  ` : "";
-  const lockedNote = !canManualForce ? `
-    <p class="conflict-note">這類衝突代表交期前容量不足，不能用人工強制介入直接送出。</p>
-  ` : "";
   return `
     <div class="conflict-actions">
       <h3>衝突修改</h3>
+      <p class="conflict-note">必須選擇延後交期重試、取消選取，或駁回此次選取；不選擇就不能接受排程。</p>
       <label>
         <span>調整開始日期</span>
         <input id="conflict-start-date" type="date" value="${escapeHtml(startDate)}">
       </label>
       <button data-preview-action="retry-start-date" type="button">用新開始日期重新試排</button>
-      ${startDate !== todayValue ? `<button data-preview-action="retry-today" type="button">改從今天重新試排</button>` : ""}
-      ${suggestedStart && suggestedStart !== startDate ? `<button data-preview-action="retry-suggested-start" type="button">改從建議開始日 ${escapeHtml(suggestedStart)} 重試</button>` : ""}
       ${renderConflictDueDateEditors(conflicts)}
-      ${manualForceControls}
-      ${lockedNote}
+      <button class="danger-button" data-preview-action="reject-preview-orders" type="button">駁回此次選取</button>
       <button class="secondary-button" data-preview-action="return-workstation" type="button">回工作站調整訂單</button>
     </div>
   `;
@@ -696,16 +842,13 @@ function renderWaterline(allocations) {
   const metrics = waterlineMetrics(allocations);
   const remainingLabel = metrics.overloaded ? "已超載" : "剩餘";
   const remainingValue = metrics.overloaded ? (metrics.total - metrics.capacity) : metrics.remaining;
-  const barWidth = metrics.overloaded ? 100 : metrics.remainingPercent;
   return `
     <div class="waterline" title="已排 ${metrics.total}/${metrics.capacity}，${remainingLabel} ${remainingValue}">
       <div class="waterline-meta">
         <span>${remainingLabel}</span>
         <strong>${remainingValue.toLocaleString()} 片</strong>
       </div>
-      <div class="waterline-track">
-        <span style="width: ${barWidth}%; background: ${metrics.color};"></span>
-      </div>
+      <progress class="waterline-meter ${metrics.tone}" value="${Math.min(metrics.total, metrics.capacity)}" max="${metrics.capacity}"></progress>
     </div>
   `;
 }
@@ -721,6 +864,26 @@ function renderCalendarItem(allocation) {
 }
 
 function renderOrderAction(order) {
+  if (state.user?.role === "sales" && order.status === "需業務處理") {
+    return `
+      <div class="drawer-actions">
+        <label>
+          <span>交期</span>
+          <input data-resubmit-field="dueDate" type="date" value="${dateOnly(order.dueDate)}">
+        </label>
+        <label>
+          <span>數量</span>
+          <input data-resubmit-field="quantity" type="number" min="25" max="2500" step="25" value="${order.quantity}">
+        </label>
+        <label>
+          <span>備註</span>
+          <textarea data-resubmit-field="note" maxlength="120" rows="2">${escapeHtml(order.note ?? "")}</textarea>
+        </label>
+        <button class="row-action" data-order-action="resubmit-order" data-order-id="${escapeHtml(order.id)}" type="button">重新送出</button>
+        <button class="row-action danger-button" data-order-action="delete-order" data-order-id="${escapeHtml(order.id)}" type="button">刪除訂單</button>
+      </div>
+    `;
+  }
   if (state.user?.role !== "scheduler") {
     return "";
   }
@@ -738,6 +901,28 @@ function renderOrderAction(order) {
 
 async function handleOrderAction(action, orderId) {
   try {
+    if (action === "resubmit-order") {
+      const card = document.querySelector(`[data-order-id="${cssEscape(orderId)}"]`);
+      const dueDate = card?.querySelector('[data-resubmit-field="dueDate"]')?.value;
+      const quantity = Number(card?.querySelector('[data-resubmit-field="quantity"]')?.value);
+      const note = card?.querySelector('[data-resubmit-field="note"]')?.value ?? "";
+      await request("/api/orders/resubmit", {
+        method: "POST",
+        body: JSON.stringify({ orderId, dueDate, quantity, note }),
+      });
+      showMessage("已重新送出", `${orderId} 已回到待排程。`);
+      await refreshWorkspace();
+      return;
+    }
+    if (action === "delete-order") {
+      const payload = await request("/api/orders", {
+        method: "DELETE",
+        body: JSON.stringify({ orderIds: [orderId] }),
+      });
+      showMessage("刪除完成", `已刪除 ${payload.deletedOrderIds?.length ?? 0} 張訂單。`);
+      await refreshWorkspace();
+      return;
+    }
     if (action === "start-production") {
       await request("/api/production/start", {
         method: "POST",
@@ -749,54 +934,23 @@ async function handleOrderAction(action, orderId) {
     }
     if (action === "confirm-production") {
       const order = state.orders.find((item) => item.id === orderId);
-      const value = window.prompt("請輸入已完成片數；填入訂單總數代表全部完成。", String(order?.quantity ?? ""));
-      if (value === null) {
-        return;
-      }
-      const producedQuantity = Number(value);
-      if (!Number.isInteger(producedQuantity) || producedQuantity <= 0) {
-        showMessage("片數不正確", "已完成片數必須是大於 0 的整數。", "warn");
-        return;
-      }
-      const payload = await request("/api/production/confirm", {
-        method: "POST",
-        body: JSON.stringify({ orderId, producedQuantity }),
-      });
-      const suffix = payload.remainder ? `，剩餘 ${payload.remainder.quantity.toLocaleString()} 片已建立為 ${payload.remainder.id}` : "";
-      showMessage("生產回報完成", `${orderId} 已更新${suffix}。`);
-      await refreshWorkspace();
+      openProductionReport(order);
     }
   } catch (error) {
     showMessage("操作失敗", error.message, "warn");
   }
 }
 
-async function scheduleDroppedOrder(orderId, startDate) {
+async function scheduleDroppedOrders(orderIds, startDate) {
   try {
     const preview = await createPreview({
       lineId: activeLine(),
       startDate,
-      orderIds: [orderId],
+      orderIds,
       manualForce: false,
       reason: "",
     }, "schedule");
-    if ((preview.conflicts ?? []).length > 0) {
-      openPreviewPage(preview);
-      return;
-    }
-    const payload = await request("/api/schedules/jobs", {
-      method: "POST",
-      body: JSON.stringify({ ...preview.request, previewId: preview.previewId }),
-    });
-    if (payload.status === "failed") {
-      openPreviewPage(preview);
-      showMessage("排程未完成", payload.message ?? "排程任務失敗。", "warn");
-      return;
-    }
-    state.preview = null;
-    state.selectedOrderIds.delete(orderId);
-    showMessage("已直接排程", `${orderId} 已從 ${startDate} 開始排入月曆。`);
-    await refreshWorkspace();
+    openPreviewDialog(preview);
   } catch (error) {
     showMessage("拖曳排程失敗", error.message, "warn");
   }
@@ -834,6 +988,80 @@ function renderConflictDueDateEditors(conflicts) {
   `;
 }
 
+function openProductionReport(order) {
+  if (!order) {
+    showMessage("找不到訂單", "請重新整理後再試一次。", "warn");
+    return;
+  }
+  closePreviewPage();
+  state.productionOrderId = order.id;
+  state.mobileView = "actions";
+  renderMobileView();
+  const form = document.getElementById("production-form");
+  form.hidden = false;
+  form.elements.orderId.value = order.id;
+  form.elements.producedQuantity.value = order.quantity;
+  form.elements.producedQuantity.max = order.quantity;
+  document.getElementById("preview-page-title").textContent = "回報生產";
+  document.getElementById("production-title").textContent = `回報 ${order.id}`;
+  document.getElementById("production-context").textContent = `總量 ${order.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於總量。`;
+  document.getElementById("preview-page-list").textContent = "輸入完成片數後送出；若未全數完成，剩餘量會建立為待排程子訂單。";
+}
+
+function closeProductionReport() {
+  state.productionOrderId = "";
+  const form = document.getElementById("production-form");
+  if (form) {
+    form.hidden = true;
+    form.reset();
+  }
+  if (!state.preview) {
+    renderPreviewSummary();
+  }
+}
+
+function renderActionResult(title, body) {
+  closeProductionReport();
+  document.getElementById("preview-page-title").textContent = title;
+  document.getElementById("preview-page-list").innerHTML = `
+    <div class="preview-item">
+      <strong>${escapeHtml(title)}</strong>
+      <span>${escapeHtml(body)}</span>
+    </div>
+  `;
+  document.getElementById("confirm-preview-order").hidden = true;
+  document.getElementById("confirm-schedule-job").hidden = true;
+  document.getElementById("close-preview-page").hidden = false;
+}
+
+async function submitProductionReport(orderId, producedQuantity) {
+  const order = state.orders.find((item) => item.id === orderId);
+  if (!order) {
+    showMessage("找不到訂單", "請重新整理後再試一次。", "warn");
+    return;
+  }
+  if (!Number.isInteger(producedQuantity) || producedQuantity <= 0) {
+    showMessage("片數不正確", "已完成片數必須是大於 0 的整數。", "warn");
+    return;
+  }
+  if (producedQuantity > order.quantity) {
+    showMessage("片數超過總量", `完成片數不可大於 ${order.quantity.toLocaleString()} 片。`, "warn");
+    return;
+  }
+  try {
+    const payload = await request("/api/production/confirm", {
+      method: "POST",
+      body: JSON.stringify({ orderId, producedQuantity }),
+    });
+    closeProductionReport();
+    const suffix = payload.remainder ? `，剩餘 ${payload.remainder.quantity.toLocaleString()} 片已建立為 ${payload.remainder.id}` : "，已全數完成";
+    showMessage("生產回報完成", `${orderId} 已更新${suffix}。`);
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("生產回報失敗", error.message, "warn");
+  }
+}
+
 function suggestedStartDate(preview) {
   const orderIds = preview?.request?.orderIds ?? [];
   const selected = state.orders.filter((order) => orderIds.includes(order.id));
@@ -860,6 +1088,80 @@ function updateSelectedCount() {
   document.getElementById("selected-count").textContent = `已選取 ${state.selectedOrderIds.size} 張訂單`;
 }
 
+function renderMobileView() {
+  document.body.dataset.mobileView = state.mobileView;
+  document.querySelectorAll("[data-mobile-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mobileView === state.mobileView);
+  });
+}
+
+function addScheduleHistory(title, body) {
+  state.scheduleHistory.unshift({
+    title,
+    body,
+    time: new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" }),
+  });
+  state.scheduleHistory = state.scheduleHistory.slice(0, 12);
+  renderScheduleHistory();
+}
+
+function renderScheduleHistory() {
+  const list = document.getElementById("schedule-history-list");
+  if (!list) {
+    return;
+  }
+  if (state.scheduleHistory.length === 0) {
+    list.textContent = "尚無排程紀錄";
+    return;
+  }
+  list.innerHTML = state.scheduleHistory.map((item) => `
+    <div class="preview-item">
+      <strong>${escapeHtml(item.title)}</strong>
+      <span>${escapeHtml(item.body)}</span>
+      <span>${escapeHtml(item.time)}</span>
+    </div>
+  `).join("");
+}
+
+function openRejectDialog(orderIds) {
+  state.rejectOrderIds = orderIds;
+  const textarea = document.getElementById("reject-reason");
+  textarea.value = "";
+  document.getElementById("reject-title").textContent = `駁回 ${orderIds.length} 張訂單`;
+  const dialog = document.getElementById("reject-dialog");
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+}
+
+async function submitRejectOrders() {
+  const reason = document.getElementById("reject-reason").value.trim();
+  if (!reason) {
+    showMessage("請填寫駁回理由", "駁回訂單前必須讓 Sales 知道需要處理什麼。", "warn");
+    return;
+  }
+  try {
+    const payload = await request("/api/orders/reject", {
+      method: "POST",
+      body: JSON.stringify({ orderIds: state.rejectOrderIds, reason }),
+    });
+    const dialog = document.getElementById("reject-dialog");
+    if (dialog.open && typeof dialog.close === "function") {
+      dialog.close();
+    }
+    const rejectedCount = payload.orders?.length ?? 0;
+    state.rejectOrderIds.forEach((orderId) => state.selectedOrderIds.delete(orderId));
+    closePreviewPage();
+    addScheduleHistory("衝突延後處理", `${rejectedCount} 張訂單已駁回給 Sales：${reason}`);
+    showMessage("已駁回訂單", `${rejectedCount} 張訂單已移交 Sales 處理。`);
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("駁回失敗", error.message, "warn");
+  }
+}
+
 function scheduleFormData() {
   const data = Object.fromEntries(new FormData(document.getElementById("schedule-form")));
   data.lineId = activeLine();
@@ -882,7 +1184,7 @@ async function retryPreview(overrides) {
     ...overrides,
   };
   const result = await createPreview(request, state.preview.kind);
-  openPreviewPage(result);
+  openPreviewDialog(result);
 }
 
 async function request(path, options = {}, needsAuth = true) {
@@ -926,6 +1228,7 @@ function clearSession() {
   state.orders = [];
   state.calendarAllocations = [];
   state.preview = null;
+  state.productionOrderId = "";
   state.selectedOrderIds.clear();
   localStorage.removeItem("woms.token");
   localStorage.removeItem("woms.user");
@@ -945,7 +1248,7 @@ function showMessage(title, body, type = "info", details = "") {
   if (typeof dialog.showModal === "function") {
     dialog.showModal();
   } else {
-    window.alert(`${title}\n${body}`);
+    dialog.setAttribute("open", "");
   }
 }
 

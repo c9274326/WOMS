@@ -37,6 +37,7 @@ test("statusClass maps WOMS statuses to stable CSS classes", () => {
   assert.equal(statusClass("已排程"), "status-scheduled");
   assert.equal(statusClass("生產中"), "status-running");
   assert.equal(statusClass("已完成"), "status-completed");
+  assert.equal(statusClass("需業務處理"), "status-rejected");
   assert.equal(statusClass("unknown"), "");
 });
 
@@ -92,6 +93,7 @@ test("uniqueValues and statusCounts provide sidebar/filter data", () => {
     "已排程": 0,
     "生產中": 0,
     "已完成": 1,
+    "需業務處理": 0,
   });
 });
 
@@ -112,6 +114,7 @@ test("lineScopedOrders limits status counts and tables to the selected line", ()
     "已排程": 0,
     "生產中": 0,
     "已完成": 1,
+    "需業務處理": 0,
   });
 });
 
@@ -143,6 +146,7 @@ test("waterlineMetrics summarizes daily capacity usage", () => {
   assert.equal(metrics.overloaded, false);
   assert.equal(metrics.remainingPercent, 75);
   assert.equal(metrics.percent, 25);
+  assert.equal(metrics.tone, "safe");
   assert.match(metrics.color, /^hsl\(\d+ 88% 48%\)$/);
 
   const full = waterlineMetrics([{ quantity: 12000 }]);
@@ -151,7 +155,11 @@ test("waterlineMetrics summarizes daily capacity usage", () => {
   assert.equal(full.overloaded, true);
   assert.equal(full.remainingPercent, 0);
   assert.equal(full.percent, 100);
+  assert.equal(full.tone, "danger");
   assert.equal(full.color, "hsl(0 88% 48%)");
+
+  const warning = waterlineMetrics([{ quantity: 8000 }]);
+  assert.equal(warning.tone, "warning");
 });
 
 test("conflictExplanation gives actionable guidance", () => {

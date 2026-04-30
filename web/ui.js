@@ -52,6 +52,7 @@ export function waterlineMetrics(allocations, capacity = 10000) {
     ratio,
     remainingPercent: Math.round(remainingRatio * 100),
     percent: Math.round(ratio * 100),
+    tone: waterlineTone(ratio),
     color: waterlineColor(ratio),
   };
 }
@@ -76,6 +77,7 @@ export function statusCounts(orders) {
     "已排程": 0,
     "生產中": 0,
     "已完成": 0,
+    "需業務處理": 0,
   };
   for (const order of orders) {
     if (Object.hasOwn(counts, order.status)) {
@@ -119,6 +121,7 @@ export function statusClass(status) {
     "已排程": "status-scheduled",
     "生產中": "status-running",
     "已完成": "status-completed",
+    "需業務處理": "status-rejected",
   }[status] ?? "";
 }
 
@@ -153,6 +156,7 @@ function orderStatusRank(status) {
     "已排程": 1,
     "生產中": 2,
     "已完成": 3,
+    "需業務處理": 4,
   }[status] ?? 99;
 }
 
@@ -176,4 +180,14 @@ function waterlineColor(ratio) {
   const progress = (clamped - 0.8) / 0.2;
   const hue = Math.round(32 - progress * 32);
   return `hsl(${hue} 88% 48%)`;
+}
+
+function waterlineTone(ratio) {
+  if (ratio >= 0.9) {
+    return "danger";
+  }
+  if (ratio >= 0.7) {
+    return "warning";
+  }
+  return "safe";
 }
