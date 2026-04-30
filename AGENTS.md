@@ -15,6 +15,7 @@ WOMS 是晶圓訂單管理與排程系統，必須以最終部署型態開發：
 - 不得提交 secrets、`.env`、本機 volume、build output、cache、IDE 私有設定。
 
 ### 文件規則
+- 每次討論需求、設計或實作前，先用 `grill-me` skill 依序把所有需要確認的事項問完，逐題收斂共識後再開始做。
 - 所有 `.md` 報告與文件都必須有 `zh-TW` 與 `en` 版本。
 - `README.md` 預設使用英文，頂部提供語言列可跳到 `README.zh-TW.md`；同時保留 `README.en.md` 作英文版本。
 - `AGENTS.md` 在同一檔案中維持雙語內容，作為團隊上下文記憶。
@@ -49,6 +50,7 @@ WOMS is a wafer order management and scheduling system. It must be built in the 
 - Do not commit secrets, `.env`, local volumes, build outputs, caches, or private IDE settings.
 
 ### Documentation Rules
+- Before discussing requirements, design, or implementation, use the `grill-me` skill to ask every question in sequence and converge on shared understanding before starting work.
 - Every `.md` report and document must provide both `zh-TW` and `en` content.
 - `README.md` defaults to English and provides a language switcher to `README.zh-TW.md`; keep `README.en.md` as the English version.
 - `AGENTS.md` keeps both languages in the same file as shared team memory.

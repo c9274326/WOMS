@@ -37,18 +37,12 @@
         </div>
       </header>
 
-      <main class="layout">
-        <aside class="panel status-panel">
-          <p class="eyebrow">Status</p>
-          <h2>訂單狀態</h2>
-          <div id="status-sidebar" class="status-list"></div>
-        </aside>
-
-        <section class="panel panel-main">
+      <main class="layout scheduler-workspace">
+        <aside class="panel order-workbench">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Orders</p>
-              <h2>訂單管理</h2>
+              <h2>訂單任務</h2>
             </div>
             <div class="toolbar">
               <label>
@@ -61,6 +55,17 @@
                 </select>
               </label>
             </div>
+          </div>
+
+          <div class="mobile-tabs scheduler-only">
+            <button class="mobile-tab active" data-mobile-view="orders" type="button">訂單</button>
+            <button class="mobile-tab" data-mobile-view="calendar" type="button">日曆</button>
+            <button class="mobile-tab" data-mobile-view="actions" type="button">處理</button>
+          </div>
+
+          <div class="status-panel">
+            <p class="eyebrow">Status</p>
+            <div id="status-sidebar" class="status-list"></div>
           </div>
 
           <div class="filter-panel">
@@ -133,97 +138,102 @@
               <span>交期</span>
               <input name="dueDate" type="date">
             </label>
+            <label class="wide-field">
+              <span>備註（選填，120 字內）</span>
+              <textarea name="note" maxlength="120" rows="2" placeholder="例如客戶可接受拆批、特殊包裝或溝通重點"></textarea>
+            </label>
             <button type="submit">加入客戶訂單到待排程</button>
           </form>
 
-          <div class="table-wrap">
-            <table>
-              <caption>所選產線訂單</caption>
-              <thead>
-                <tr>
-                  <th class="select-cell scheduler-only">選取</th>
-                  <th>訂單</th>
-                  <th>客戶</th>
-                  <th>產線</th>
-                  <th class="numeric">數量</th>
-                  <th>優先級</th>
-                  <th>狀態</th>
-                  <th>交期</th>
-                </tr>
-              </thead>
-              <tbody id="orders-body"></tbody>
-            </table>
-          </div>
+          <section id="sales-rejected-panel" class="sales-rejected-panel" hidden>
+            <div class="panel-heading compact-heading">
+              <div>
+                <p class="eyebrow">Sales Follow-up</p>
+                <h3>需處理訂單</h3>
+              </div>
+            </div>
+            <div id="sales-rejected-list" class="order-card-list compact-list"></div>
+          </section>
+
+          <div id="orders-body" class="order-card-list"></div>
           <div id="batch-bar" class="batch-bar">
             <span id="selected-count">已選取 0 張訂單</span>
             <button id="preview-selected" type="button">試排選取訂單</button>
+            <button id="reject-selected" class="secondary-button" type="button">駁回已選取訂單</button>
             <button id="delete-selected" class="danger-button" type="button">刪除已選取的訂單</button>
+            <button id="create-conflict-demo" class="secondary-button" type="button">建立衝突測試訂單</button>
           </div>
+        </aside>
 
-          <section class="calendar-section">
-            <div class="panel-heading compact-heading">
-              <div>
-                <p class="eyebrow">Calendar</p>
-                <h2>月排程</h2>
-              </div>
-              <div class="calendar-controls">
-                <button id="prev-month" type="button">上個月</button>
-                <strong id="calendar-title"></strong>
-                <button id="today-month" type="button">今天</button>
-                <button id="next-month" type="button">下個月</button>
-              </div>
+        <section class="panel calendar-section">
+          <div class="panel-heading compact-heading">
+            <div>
+              <p class="eyebrow">Calendar</p>
+              <h2>月排程</h2>
             </div>
-            <div class="calendar-weekdays">
-              <span>日</span>
-              <span>一</span>
-              <span>二</span>
-              <span>三</span>
-              <span>四</span>
-              <span>五</span>
-              <span>六</span>
+            <div class="calendar-controls">
+              <button id="prev-month" type="button">上個月</button>
+              <strong id="calendar-title"></strong>
+              <button id="today-month" type="button">今天</button>
+              <button id="next-month" type="button">下個月</button>
             </div>
-            <div id="calendar-grid" class="calendar-grid"></div>
-          </section>
+          </div>
+          <div class="calendar-weekdays">
+            <span>日</span>
+            <span>一</span>
+            <span>二</span>
+            <span>三</span>
+            <span>四</span>
+            <span>五</span>
+            <span>六</span>
+          </div>
+          <div id="calendar-grid" class="calendar-grid"></div>
         </section>
 
-        <aside id="scheduler-panel" class="panel side-panel">
+        <aside id="scheduler-panel" class="panel action-drawer">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Scheduling</p>
-              <h2>試排與任務</h2>
+              <h2>排程紀錄</h2>
             </div>
           </div>
-          <form id="schedule-form" class="stack-form">
+          <form id="schedule-form" class="stack-form" hidden>
             <input name="lineId" type="hidden">
-            <label>
-              <span>開始日期</span>
-              <input name="startDate" type="date">
-            </label>
-            <label class="check-option standalone-check">
-              <input name="manualForce" type="checkbox">
-              <span>人工強制介入</span>
-            </label>
-            <label>
-              <span>原因</span>
-              <input name="reason" placeholder="強制介入時必填">
-            </label>
-            <button name="action" value="preview" type="submit">試排程</button>
-            <button id="create-conflict-demo" type="button">建立衝突測試訂單</button>
+            <input name="startDate" type="date">
+            <input name="reason">
           </form>
-          <div class="preview-panel">
-            <p class="eyebrow">Preview Result</p>
-            <div id="preview-list" class="preview-list">尚未試排</div>
+          <form id="production-form" class="stack-form production-form" hidden>
+            <input name="orderId" type="hidden">
+            <div>
+              <p class="eyebrow">Production</p>
+              <h3 id="production-title">回報生產</h3>
+              <p id="production-context" class="drawer-note"></p>
+            </div>
+            <label>
+              <span>完成片數</span>
+              <input name="producedQuantity" type="number" min="1" step="1">
+            </label>
+            <div class="drawer-actions">
+              <button type="submit">送出回報</button>
+              <button id="cancel-production-report" class="secondary-button" type="button">取消</button>
+            </div>
+          </form>
+          <div class="preview-panel history-panel">
+            <p class="eyebrow">History</p>
+            <div id="schedule-history-list" class="preview-list">尚無排程紀錄</div>
           </div>
         </aside>
       </main>
+    </div>
 
-      <section id="preview-page" class="preview-page" hidden>
+    <dialog id="schedule-preview-dialog" class="preview-dialog">
+      <form method="dialog" class="preview-dialog-shell">
         <div class="preview-page-header">
           <div>
-            <p class="eyebrow">Preview Result</p>
+            <p class="eyebrow">Schedule Preview</p>
             <h2 id="preview-page-title">排程結果確認</h2>
           </div>
-          <button id="close-preview-page" type="button">返回工作台</button>
+          <button id="close-preview-page" class="secondary-button" value="cancel" type="button">放棄</button>
         </div>
         <div class="preview-page-grid">
           <section>
@@ -232,15 +242,27 @@
           </section>
           <aside>
             <h3>衝突與分配</h3>
-            <div id="preview-page-list" class="preview-list"></div>
+            <div id="preview-page-list" class="preview-list">尚未試排</div>
             <div class="preview-actions">
               <button id="confirm-preview-order" type="button" hidden>放到待排程訂單</button>
-              <button id="confirm-schedule-job" type="button" hidden>確認執行排程</button>
+              <button id="confirm-schedule-job" type="button" hidden>接受排程結果</button>
             </div>
           </aside>
         </div>
-      </section>
-    </div>
+      </form>
+    </dialog>
+
+    <dialog id="reject-dialog" class="message-dialog">
+      <form method="dialog">
+        <h2 id="reject-title">駁回訂單</h2>
+        <p>請填寫駁回理由，Sales 會在需處理區看到此訂單。</p>
+        <textarea id="reject-reason" maxlength="240" rows="4" placeholder="例如交期前產能不足，請與客戶協調交期或訂單內容。"></textarea>
+        <menu>
+          <button value="cancel">取消</button>
+          <button id="confirm-reject-orders" value="default" type="button">送出駁回</button>
+        </menu>
+      </form>
+    </dialog>
 
     <dialog id="message-dialog" class="message-dialog">
       <form method="dialog">

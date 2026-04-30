@@ -49,6 +49,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleOrders(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/preview-confirm":
 		s.handleConfirmPreviewOrder(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/reject":
+		s.handleRejectOrders(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/resubmit":
+		s.handleResubmitOrder(w, r)
 	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/orders/"):
 		s.handleUpdateOrder(w, r)
 	case r.URL.Path == "/api/users":
@@ -175,6 +179,52 @@ func (s *Server) handleConfirmPreviewOrder(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusCreated, order)
+}
+
+func (s *Server) handleRejectOrders(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleScheduler {
+		writeError(w, http.StatusForbidden, "only schedulers can reject orders")
+		return
+	}
+	var req rejectOrdersRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.store.RejectOrders(req, claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleResubmitOrder(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleSales {
+		writeError(w, http.StatusForbidden, "only sales can resubmit rejected orders")
+		return
+	}
+	var req resubmitOrderRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	order, err := s.store.ResubmitOrder(req, claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, order)
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
@@ -400,6 +450,7 @@ type createOrderRequest struct {
 	Quantity int             `json:"quantity"`
 	Priority domain.Priority `json:"priority"`
 	DueDate  string          `json:"dueDate"`
+	Note     string          `json:"note"`
 }
 
 type deleteOrdersRequest struct {
@@ -412,7 +463,25 @@ type deleteOrdersResponse struct {
 }
 
 type updateOrderRequest struct {
-	DueDate string `json:"dueDate"`
+	DueDate  string `json:"dueDate"`
+	Quantity int    `json:"quantity"`
+	Note     string `json:"note"`
+}
+
+type rejectOrdersRequest struct {
+	OrderIDs []string `json:"orderIds"`
+	Reason   string   `json:"reason"`
+}
+
+type rejectOrdersResponse struct {
+	Orders []domain.Order `json:"orders"`
+}
+
+type resubmitOrderRequest struct {
+	OrderID  string `json:"orderId"`
+	DueDate  string `json:"dueDate"`
+	Quantity int    `json:"quantity"`
+	Note     string `json:"note"`
 }
 
 type assignUserRequest struct {
@@ -489,14 +558,28 @@ func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, clai
 	if claims.Role != domain.RoleAdmin && claims.Role != domain.RoleSales && claims.Role != domain.RoleScheduler {
 		return domain.Order{}, errors.New("role cannot update orders")
 	}
-	if order.Status != domain.StatusPending {
-		return domain.Order{}, errors.New("only pending orders can change due date")
+	if order.Status != domain.StatusPending && order.Status != domain.StatusRejected {
+		return domain.Order{}, errors.New("only pending or rejected orders can change order details")
 	}
-	dueDate, err := time.Parse(dateLayout, req.DueDate)
-	if err != nil {
-		return domain.Order{}, errors.New("dueDate must use YYYY-MM-DD")
+	if req.DueDate != "" {
+		dueDate, err := time.Parse(dateLayout, req.DueDate)
+		if err != nil {
+			return domain.Order{}, errors.New("dueDate must use YYYY-MM-DD")
+		}
+		order.DueDate = dueDate
 	}
-	order.DueDate = dueDate
+	if req.Quantity != 0 {
+		if req.Quantity < 25 || req.Quantity > 2500 {
+			return domain.Order{}, errors.New("quantity must be between 25 and 2500")
+		}
+		order.Quantity = req.Quantity
+	}
+	if req.Note != "" {
+		if len([]rune(req.Note)) > 120 {
+			return domain.Order{}, errors.New("note must be 120 characters or fewer")
+		}
+		order.Note = req.Note
+	}
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
 	s.auditLocked(claims.Subject, "order.update_due_date", order.ID, req.DueDate)
@@ -504,8 +587,8 @@ func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, clai
 }
 
 func (s *MemoryStore) createOrderLocked(req createOrderRequest, actorID string) (domain.Order, error) {
-	if req.Customer == "" || req.Quantity < 25 || req.Quantity > 2500 {
-		return domain.Order{}, errors.New("customer is required and quantity must be between 25 and 2500")
+	if err := validateOrderFields(req.Customer, req.Quantity, req.Note); err != nil {
+		return domain.Order{}, err
 	}
 	if _, ok := s.lines[req.LineID]; !ok {
 		return domain.Order{}, errors.New("production line does not exist")
@@ -532,12 +615,93 @@ func (s *MemoryStore) createOrderLocked(req createOrderRequest, actorID string) 
 		Priority:  req.Priority,
 		Status:    domain.StatusPending,
 		DueDate:   dueDate,
+		Note:      strings.TrimSpace(req.Note),
 		CreatedBy: actorID,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	s.orders[id] = order
 	s.auditLocked(actorID, "order.create", id, "")
+	return order, nil
+}
+
+func (s *MemoryStore) RejectOrders(req rejectOrdersRequest, claims auth.Claims) (rejectOrdersResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(req.OrderIDs) == 0 {
+		return rejectOrdersResponse{}, errors.New("orderIds is required")
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return rejectOrdersResponse{}, errors.New("rejection reason is required")
+	}
+	if len([]rune(reason)) > 240 {
+		return rejectOrdersResponse{}, errors.New("rejection reason must be 240 characters or fewer")
+	}
+	now := time.Now().UTC()
+	result := rejectOrdersResponse{Orders: []domain.Order{}}
+	for _, id := range req.OrderIDs {
+		order, ok := s.orders[id]
+		if !ok {
+			return rejectOrdersResponse{}, errors.New("order not found: " + id)
+		}
+		if order.LineID != claims.LineID {
+			return rejectOrdersResponse{}, errors.New("cannot reject another production line")
+		}
+		if order.Status != domain.StatusPending {
+			return rejectOrdersResponse{}, errors.New("only pending orders can be rejected")
+		}
+		order.Status = domain.StatusRejected
+		order.RejectionReason = reason
+		order.RejectedBy = claims.Subject
+		order.RejectedAt = now
+		order.UpdatedAt = now
+		s.orders[order.ID] = order
+		s.auditLocked(claims.Subject, "order.reject", order.ID, reason)
+		result.Orders = append(result.Orders, order)
+	}
+	return result, nil
+}
+
+func (s *MemoryStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Claims) (domain.Order, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	order, ok := s.orders[req.OrderID]
+	if !ok {
+		return domain.Order{}, errors.New("order not found")
+	}
+	if order.CreatedBy != claims.Subject {
+		return domain.Order{}, errors.New("sales can resubmit only their own orders")
+	}
+	if order.Status != domain.StatusRejected {
+		return domain.Order{}, errors.New("only rejected orders can be resubmitted")
+	}
+	if req.Quantity != 0 {
+		if req.Quantity < 25 || req.Quantity > 2500 {
+			return domain.Order{}, errors.New("quantity must be between 25 and 2500")
+		}
+		order.Quantity = req.Quantity
+	}
+	if req.DueDate != "" {
+		dueDate, err := time.Parse(dateLayout, req.DueDate)
+		if err != nil {
+			return domain.Order{}, errors.New("dueDate must use YYYY-MM-DD")
+		}
+		order.DueDate = dueDate
+	}
+	if len([]rune(req.Note)) > 120 {
+		return domain.Order{}, errors.New("note must be 120 characters or fewer")
+	}
+	order.Note = strings.TrimSpace(req.Note)
+	order.Status = domain.StatusPending
+	order.RejectionReason = ""
+	order.RejectedBy = ""
+	order.RejectedAt = time.Time{}
+	order.UpdatedAt = time.Now().UTC()
+	s.orders[order.ID] = order
+	s.auditLocked(claims.Subject, "order.resubmit", order.ID, "")
 	return order, nil
 }
 
@@ -548,6 +712,9 @@ func (s *MemoryStore) ListOrders(claims auth.Claims) []domain.Order {
 	orders := make([]domain.Order, 0, len(s.orders))
 	for _, order := range s.orders {
 		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
+			continue
+		}
+		if claims.Role == domain.RoleScheduler && order.Status == domain.StatusRejected {
 			continue
 		}
 		orders = append(orders, order)
@@ -889,6 +1056,9 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 	if req.ProducedQuantity <= 0 {
 		return productionConfirmResponse{}, errors.New("producedQuantity must be greater than zero")
 	}
+	if req.ProducedQuantity > order.Quantity {
+		return productionConfirmResponse{}, errors.New("producedQuantity cannot exceed order quantity")
+	}
 	result, err := scheduler.ConfirmProduction(order, req.ProducedQuantity, time.Now().UTC())
 	if err != nil {
 		return productionConfirmResponse{}, err
@@ -1169,8 +1339,8 @@ func (s *MemoryStore) trimAllocationsForProducedLocked(orderID string, produced 
 }
 
 func validateOrderRequest(req createOrderRequest, lines map[string]domain.ProductionLine) (time.Time, error) {
-	if req.Customer == "" || req.Quantity < 25 || req.Quantity > 2500 {
-		return time.Time{}, errors.New("customer is required and quantity must be between 25 and 2500")
+	if err := validateOrderFields(req.Customer, req.Quantity, req.Note); err != nil {
+		return time.Time{}, err
 	}
 	if _, ok := lines[req.LineID]; !ok {
 		return time.Time{}, errors.New("production line does not exist")
@@ -1186,6 +1356,16 @@ func validateOrderRequest(req createOrderRequest, lines map[string]domain.Produc
 		return time.Time{}, errors.New("dueDate must use YYYY-MM-DD")
 	}
 	return dueDate, nil
+}
+
+func validateOrderFields(customer string, quantity int, note string) error {
+	if strings.TrimSpace(customer) == "" || quantity < 25 || quantity > 2500 {
+		return errors.New("customer is required and quantity must be between 25 and 2500")
+	}
+	if len([]rune(note)) > 120 {
+		return errors.New("note must be 120 characters or fewer")
+	}
+	return nil
 }
 
 func normalizedPreviewRequest(req scheduleRequest) scheduleRequest {

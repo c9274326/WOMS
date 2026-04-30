@@ -24,6 +24,7 @@ const (
 	StatusScheduled  OrderStatus = "已排程"
 	StatusInProgress OrderStatus = "生產中"
 	StatusCompleted  OrderStatus = "已完成"
+	StatusRejected   OrderStatus = "需業務處理"
 )
 
 type User struct {
@@ -41,17 +42,21 @@ type ProductionLine struct {
 }
 
 type Order struct {
-	ID          string      `json:"id"`
-	Customer    string      `json:"customer"`
-	LineID      string      `json:"lineId"`
-	Quantity    int         `json:"quantity"`
-	Priority    Priority    `json:"priority"`
-	Status      OrderStatus `json:"status"`
-	DueDate     time.Time   `json:"dueDate"`
-	CreatedBy   string      `json:"createdBy"`
-	SourceOrder string      `json:"sourceOrder,omitempty"`
-	CreatedAt   time.Time   `json:"createdAt"`
-	UpdatedAt   time.Time   `json:"updatedAt"`
+	ID              string      `json:"id"`
+	Customer        string      `json:"customer"`
+	LineID          string      `json:"lineId"`
+	Quantity        int         `json:"quantity"`
+	Priority        Priority    `json:"priority"`
+	Status          OrderStatus `json:"status"`
+	DueDate         time.Time   `json:"dueDate"`
+	Note            string      `json:"note,omitempty"`
+	CreatedBy       string      `json:"createdBy"`
+	SourceOrder     string      `json:"sourceOrder,omitempty"`
+	RejectionReason string      `json:"rejectionReason,omitempty"`
+	RejectedBy      string      `json:"rejectedBy,omitempty"`
+	RejectedAt      time.Time   `json:"rejectedAt,omitempty"`
+	CreatedAt       time.Time   `json:"createdAt"`
+	UpdatedAt       time.Time   `json:"updatedAt"`
 }
 
 type ScheduleAllocation struct {

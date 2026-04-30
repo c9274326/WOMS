@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/c9274326/woms/internal/domain"
@@ -465,6 +466,79 @@ func TestPartialProductionCreatesPendingRemainderAndTrimsAllocation(t *testing.T
 	}
 	if len(store.allocations) != 1 || store.allocations[0].Quantity != 1500 || !store.allocations[0].Locked {
 		t.Fatalf("expected trimmed locked allocation, got %+v", store.allocations)
+	}
+}
+
+func TestProductionConfirmRejectsQuantityAboveOrderTotal(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+	startProduction(t, server, schedulerA, "ORD-1")
+
+	body := bytes.NewBufferString(`{"orderId":"ORD-1","producedQuantity":2501}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/production/confirm", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "producedQuantity cannot exceed order quantity") {
+		t.Fatalf("expected clear quantity error, got %s", res.Body.String())
+	}
+}
+
+func TestSchedulerRejectsPendingOrdersAndSalesCanResubmit(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03","note":"customer can accept split delivery"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create order failed: %d %s", res.Code, res.Body.String())
+	}
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	body = bytes.NewBufferString(`{"orderIds":["ORD-1"],"reason":"capacity unavailable before due date"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders/reject", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("reject failed: %d %s", res.Code, res.Body.String())
+	}
+	if store.orders["ORD-1"].Status != domain.StatusRejected || store.orders["ORD-1"].RejectionReason == "" {
+		t.Fatalf("expected rejected order with reason, got %+v", store.orders["ORD-1"])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if strings.Contains(res.Body.String(), "ORD-1") {
+		t.Fatalf("rejected order should be hidden from scheduler pending queue: %s", res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"orderId":"ORD-1","dueDate":"2026-05-05","quantity":2000,"note":"customer agreed to smaller first batch"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders/resubmit", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("resubmit failed: %d %s", res.Code, res.Body.String())
+	}
+	if store.orders["ORD-1"].Status != domain.StatusPending || store.orders["ORD-1"].RejectionReason != "" {
+		t.Fatalf("expected resubmitted pending order, got %+v", store.orders["ORD-1"])
+	}
+	if store.orders["ORD-1"].Quantity != 2000 || store.orders["ORD-1"].Note != "customer agreed to smaller first batch" {
+		t.Fatalf("expected sales edits to persist, got %+v", store.orders["ORD-1"])
 	}
 }
 
