@@ -14,6 +14,23 @@ export function exactFilterOrders(orders, filters) {
   });
 }
 
+export function sortOrdersForWorkstation(orders) {
+  return [...orders].sort((a, b) => {
+    const statusDelta = orderStatusRank(a.status) - orderStatusRank(b.status);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+    const dueDelta = dateValue(a.dueDate) - dateValue(b.dueDate);
+    if (dueDelta !== 0) {
+      return dueDelta;
+    }
+    if (a.priority !== b.priority) {
+      return a.priority === "high" ? -1 : 1;
+    }
+    return naturalOrderNumber(a.id) - naturalOrderNumber(b.id) || String(a.id).localeCompare(String(b.id));
+  });
+}
+
 export function defaultLine(lines) {
   return [...lines].sort()[0] ?? "";
 }
@@ -26,12 +43,14 @@ export function waterlineMetrics(allocations, capacity = 10000) {
   const total = allocations.reduce((sum, allocation) => sum + Number(allocation.quantity ?? 0), 0);
   const ratio = capacity > 0 ? Math.min(total / capacity, 1) : 0;
   const remaining = Math.max(capacity - total, 0);
+  const remainingRatio = capacity > 0 ? remaining / capacity : 0;
   return {
     total,
     capacity,
     remaining,
     overloaded: total > capacity,
     ratio,
+    remainingPercent: Math.round(remainingRatio * 100),
     percent: Math.round(ratio * 100),
     color: waterlineColor(ratio),
   };
@@ -126,6 +145,25 @@ function matchesSet(value, selected) {
 
 function matchesStatus(value, selected) {
   return !selected || String(value) === selected;
+}
+
+function orderStatusRank(status) {
+  return {
+    "待排程": 0,
+    "已排程": 1,
+    "生產中": 2,
+    "已完成": 3,
+  }[status] ?? 99;
+}
+
+function dateValue(value) {
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
+}
+
+function naturalOrderNumber(value) {
+  const match = String(value).match(/(\d+)$/);
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
 }
 
 function waterlineColor(ratio) {

@@ -10,6 +10,7 @@ import {
   matchesOrder,
   monthGrid,
   priorityLabel,
+  sortOrdersForWorkstation,
   statusClass,
   statusCounts,
   uniqueValues,
@@ -66,6 +67,17 @@ test("exactFilterOrders treats status as single-select", () => {
     priorities: new Set(),
   });
   assert.deepEqual(result.map((item) => item.id), ["ORD-2"]);
+});
+
+test("sortOrdersForWorkstation sorts by workflow, due date, and natural order number", () => {
+  const orders = [
+    { id: "ORD-10", status: "待排程", dueDate: "2026-04-30", priority: "low" },
+    { id: "ORD-2", status: "已排程", dueDate: "2026-05-04", priority: "low" },
+    { id: "ORD-7", status: "待排程", dueDate: "2026-04-30", priority: "low" },
+    { id: "ORD-1", status: "已完成", dueDate: "2026-04-29", priority: "high" },
+    { id: "ORD-6", status: "待排程", dueDate: "2026-04-30", priority: "low" },
+  ];
+  assert.deepEqual(sortOrdersForWorkstation(orders).map((item) => item.id), ["ORD-6", "ORD-7", "ORD-10", "ORD-2", "ORD-1"]);
 });
 
 test("uniqueValues and statusCounts provide sidebar/filter data", () => {
@@ -129,6 +141,7 @@ test("waterlineMetrics summarizes daily capacity usage", () => {
   assert.equal(metrics.capacity, 10000);
   assert.equal(metrics.remaining, 7500);
   assert.equal(metrics.overloaded, false);
+  assert.equal(metrics.remainingPercent, 75);
   assert.equal(metrics.percent, 25);
   assert.match(metrics.color, /^hsl\(\d+ 88% 48%\)$/);
 
@@ -136,6 +149,7 @@ test("waterlineMetrics summarizes daily capacity usage", () => {
   assert.equal(full.total, 12000);
   assert.equal(full.remaining, 0);
   assert.equal(full.overloaded, true);
+  assert.equal(full.remainingPercent, 0);
   assert.equal(full.percent, 100);
   assert.equal(full.color, "hsl(0 88% 48%)");
 });

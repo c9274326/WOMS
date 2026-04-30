@@ -1,6 +1,10 @@
 package api
 
-import "github.com/c9274326/woms/internal/domain"
+import (
+	"time"
+
+	"github.com/c9274326/woms/internal/domain"
+)
 
 func NewDemoMemoryStore() *MemoryStore {
 	store := NewMemoryStore()
@@ -23,7 +27,7 @@ func NewDemoMemoryStore() *MemoryStore {
 		store.allocations = append(store.allocations, domain.ScheduleAllocation{
 			OrderID:  order.ID,
 			LineID:   order.LineID,
-			Date:     order.DueDate,
+			Date:     mustDemoDate("2026-05-01"),
 			Quantity: order.Quantity,
 			Priority: order.Priority,
 			Locked:   false,
@@ -34,4 +38,12 @@ func NewDemoMemoryStore() *MemoryStore {
 		store.orders[order.ID] = order
 	}
 	return store
+}
+
+func mustDemoDate(value string) time.Time {
+	parsed, err := time.Parse(dateLayout, value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }

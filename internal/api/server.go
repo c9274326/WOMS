@@ -49,6 +49,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleOrders(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/preview-confirm":
 		s.handleConfirmPreviewOrder(w, r)
+	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/orders/"):
+		s.handleUpdateOrder(w, r)
 	case r.URL.Path == "/api/users":
 		s.handleUsers(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/demo/conflict-orders":
@@ -63,6 +65,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleGetScheduleJob(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/production/confirm":
 		s.handleProductionConfirm(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/production/start":
+		s.handleProductionStart(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "route not found")
 	}
@@ -407,6 +411,10 @@ type deleteOrdersResponse struct {
 	SkippedOrderIDs []string `json:"skippedOrderIds,omitempty"`
 }
 
+type updateOrderRequest struct {
+	DueDate string `json:"dueDate"`
+}
+
 type assignUserRequest struct {
 	Username string      `json:"username"`
 	Role     domain.Role `json:"role"`
@@ -443,6 +451,56 @@ func (s *MemoryStore) CreateOrder(req createOrderRequest, actorID string) (domai
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.createOrderLocked(req, actorID)
+}
+
+func (s *Server) handleUpdateOrder(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/orders/")
+	var req updateOrderRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	order, err := s.store.UpdateOrderDueDate(id, req, claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, order)
+}
+
+func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, claims auth.Claims) (domain.Order, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	order, ok := s.orders[id]
+	if !ok {
+		return domain.Order{}, errors.New("order not found")
+	}
+	if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
+		return domain.Order{}, errors.New("cannot update another production line")
+	}
+	if claims.Role == domain.RoleSales && order.CreatedBy != claims.Subject {
+		return domain.Order{}, errors.New("sales can update only their own orders")
+	}
+	if claims.Role != domain.RoleAdmin && claims.Role != domain.RoleSales && claims.Role != domain.RoleScheduler {
+		return domain.Order{}, errors.New("role cannot update orders")
+	}
+	if order.Status != domain.StatusPending {
+		return domain.Order{}, errors.New("only pending orders can change due date")
+	}
+	dueDate, err := time.Parse(dateLayout, req.DueDate)
+	if err != nil {
+		return domain.Order{}, errors.New("dueDate must use YYYY-MM-DD")
+	}
+	order.DueDate = dueDate
+	order.UpdatedAt = time.Now().UTC()
+	s.orders[order.ID] = order
+	s.auditLocked(claims.Subject, "order.update_due_date", order.ID, req.DueDate)
+	return order, nil
 }
 
 func (s *MemoryStore) createOrderLocked(req createOrderRequest, actorID string) (domain.Order, error) {
@@ -759,9 +817,60 @@ type productionConfirmRequest struct {
 	ProducedQuantity int    `json:"producedQuantity"`
 }
 
+type productionStartRequest struct {
+	OrderID string `json:"orderId"`
+}
+
 type productionConfirmResponse struct {
 	Order     domain.Order  `json:"order"`
 	Remainder *domain.Order `json:"remainder,omitempty"`
+}
+
+func (s *Server) handleProductionStart(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleScheduler {
+		writeError(w, http.StatusForbidden, "only schedulers can start production")
+		return
+	}
+	var req productionStartRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	order, err := s.store.StartProduction(req, claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, order)
+}
+
+func (s *MemoryStore) StartProduction(req productionStartRequest, claims auth.Claims) (domain.Order, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	order, ok := s.orders[req.OrderID]
+	if !ok {
+		return domain.Order{}, errors.New("order not found")
+	}
+	if order.LineID != claims.LineID {
+		return domain.Order{}, errors.New("cannot start another production line")
+	}
+	if order.Status != domain.StatusScheduled {
+		return domain.Order{}, errors.New("only scheduled orders can start production")
+	}
+	if !s.hasAllocationLocked(order.ID) {
+		return domain.Order{}, errors.New("scheduled order has no allocation")
+	}
+	order.Status = domain.StatusInProgress
+	order.UpdatedAt = time.Now().UTC()
+	s.orders[order.ID] = order
+	s.lockAllocationsLocked(order.ID)
+	s.auditLocked(claims.Subject, "production.start", order.ID, "")
+	return order, nil
 }
 
 func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims auth.Claims) (productionConfirmResponse, error) {
@@ -773,6 +882,12 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 	}
 	if order.LineID != claims.LineID {
 		return productionConfirmResponse{}, errors.New("cannot confirm another production line")
+	}
+	if order.Status != domain.StatusInProgress {
+		return productionConfirmResponse{}, errors.New("only in-progress orders can be confirmed")
+	}
+	if req.ProducedQuantity <= 0 {
+		return productionConfirmResponse{}, errors.New("producedQuantity must be greater than zero")
 	}
 	result, err := scheduler.ConfirmProduction(order, req.ProducedQuantity, time.Now().UTC())
 	if err != nil {
@@ -786,15 +901,18 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 		return productionConfirmResponse{Order: order}, nil
 	}
 
-	order.Status = domain.StatusInProgress
+	originalQuantity := order.Quantity
+	order.Quantity = req.ProducedQuantity
+	order.Status = domain.StatusCompleted
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
+	s.trimAllocationsForProducedLocked(order.ID, req.ProducedQuantity)
 
 	remainder := *result.Remainder
 	remainder.ID = "ORD-" + strconv.Itoa(s.nextOrderID)
 	s.nextOrderID++
 	s.orders[remainder.ID] = remainder
-	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "created remainder "+remainder.ID)
+	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", created remainder "+remainder.ID)
 	return productionConfirmResponse{Order: order, Remainder: &remainder}, nil
 }
 
@@ -996,6 +1114,56 @@ func (s *MemoryStore) removeAllocationsLocked(orderID string) {
 		if allocation.OrderID != orderID {
 			kept = append(kept, allocation)
 		}
+	}
+	s.allocations = kept
+}
+
+func (s *MemoryStore) hasAllocationLocked(orderID string) bool {
+	for _, allocation := range s.allocations {
+		if allocation.OrderID == orderID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) lockAllocationsLocked(orderID string) {
+	for index, allocation := range s.allocations {
+		if allocation.OrderID == orderID {
+			s.allocations[index].Locked = true
+		}
+	}
+}
+
+func (s *MemoryStore) trimAllocationsForProducedLocked(orderID string, produced int) {
+	sort.SliceStable(s.allocations, func(i, j int) bool {
+		if s.allocations[i].OrderID == orderID && s.allocations[j].OrderID != orderID {
+			return true
+		}
+		if s.allocations[i].OrderID != orderID && s.allocations[j].OrderID == orderID {
+			return false
+		}
+		if !s.allocations[i].Date.Equal(s.allocations[j].Date) {
+			return s.allocations[i].Date.Before(s.allocations[j].Date)
+		}
+		return s.allocations[i].OrderID < s.allocations[j].OrderID
+	})
+	remainingProduced := produced
+	kept := s.allocations[:0]
+	for _, allocation := range s.allocations {
+		if allocation.OrderID != orderID {
+			kept = append(kept, allocation)
+			continue
+		}
+		if remainingProduced <= 0 {
+			continue
+		}
+		if allocation.Quantity > remainingProduced {
+			allocation.Quantity = remainingProduced
+		}
+		remainingProduced -= allocation.Quantity
+		allocation.Locked = true
+		kept = append(kept, allocation)
 	}
 	s.allocations = kept
 }
