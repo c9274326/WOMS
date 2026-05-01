@@ -60,12 +60,13 @@ type Order struct {
 }
 
 type ScheduleAllocation struct {
-	OrderID  string    `json:"orderId"`
-	LineID   string    `json:"lineId"`
-	Date     time.Time `json:"date"`
-	Quantity int       `json:"quantity"`
-	Priority Priority  `json:"priority"`
-	Locked   bool      `json:"locked"`
+	OrderID  string      `json:"orderId"`
+	LineID   string      `json:"lineId"`
+	Date     time.Time   `json:"date"`
+	Quantity int         `json:"quantity"`
+	Priority Priority    `json:"priority"`
+	Locked   bool        `json:"locked"`
+	Status   OrderStatus `json:"status,omitempty"`
 }
 
 type ScheduleConflict struct {

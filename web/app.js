@@ -172,7 +172,7 @@ document.getElementById("schedule-form").addEventListener("submit", async (event
 document.getElementById("production-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = Object.fromEntries(new FormData(event.currentTarget));
-  await submitProductionReport(form.orderId, Number(form.producedQuantity));
+  await submitProductionReport(form.orderId, form.productionDate, Number(form.producedQuantity));
 });
 
 document.getElementById("cancel-production-report").addEventListener("click", () => {
@@ -725,7 +725,7 @@ function renderCalendar() {
   grid.querySelectorAll("[data-calendar-order-id]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      handleCalendarOrderClick(button.dataset.calendarOrderId);
+      handleCalendarOrderClick(button.dataset.calendarOrderId, button.dataset.calendarDate);
     });
   });
 }
@@ -909,7 +909,7 @@ function renderCalendarItem(allocation) {
   const actionable = !allocation.preview && (allocation.status === statuses[1] || allocation.status === statuses[2]);
   const tag = actionable ? "button" : "div";
   const attrs = actionable
-    ? `type="button" data-calendar-order-id="${escapeHtml(allocation.orderId)}"`
+    ? `type="button" data-calendar-order-id="${escapeHtml(allocation.orderId)}" data-calendar-date="${dateOnly(allocation.date)}"`
     : "";
   return `
     <${tag} class="calendar-item ${priorityClass(allocation.priority)} ${allocation.preview ? "preview-item-inline" : ""}" ${attrs}>
@@ -920,7 +920,7 @@ function renderCalendarItem(allocation) {
   `;
 }
 
-function handleCalendarOrderClick(orderId) {
+function handleCalendarOrderClick(orderId, productionDate = "") {
   const order = state.orders.find((item) => item.id === orderId);
   if (!order) {
     showMessage("找不到訂單", `${orderId} 不在目前工作站訂單清單內。`, "warn");
@@ -931,7 +931,7 @@ function handleCalendarOrderClick(orderId) {
     return;
   }
   if (order.status === statuses[2]) {
-    handleOrderAction("confirm-production", orderId);
+    handleOrderAction("confirm-production", orderId, productionDate);
   }
 }
 
@@ -971,7 +971,7 @@ function renderOrderAction(order) {
   return "";
 }
 
-async function handleOrderAction(action, orderId) {
+async function handleOrderAction(action, orderId, productionDate = "") {
   try {
     if (action === "resubmit-order") {
       const card = document.querySelector(`[data-order-id="${cssEscape(orderId)}"]`);
@@ -1005,20 +1005,18 @@ async function handleOrderAction(action, orderId) {
     }
     if (action === "confirm-production") {
       const order = state.orders.find((item) => item.id === orderId);
-      openProductionReport(order);
+      openProductionReport(order, productionDate);
     }
   } catch (error) {
     showMessage("操作失敗", error.message, "warn");
   }
 }
 
-async function scheduleDroppedOrders(orderIds) {
+async function scheduleDroppedOrders(orderIds, targetDate) {
   try {
-    const currentDate = dateInputValue(new Date());
     const preview = await createPreview({
       lineId: activeLine(),
-      startDate: currentDate,
-      currentDate,
+      startDate: targetDate,
       orderIds,
       manualForce: false,
       reason: "",
@@ -1061,9 +1059,14 @@ function renderConflictDueDateEditors(conflicts) {
   `;
 }
 
-function openProductionReport(order) {
+function openProductionReport(order, productionDate = "") {
   if (!order) {
     showMessage("找不到訂單", "請重新整理後再試一次。", "warn");
+    return;
+  }
+  const allocation = productionAllocationForOrder(order.id, productionDate);
+  if (!allocation) {
+    showMessage("找不到排程", "請從日曆上的排程日期回報生產。", "warn");
     return;
   }
   state.productionOrderId = order.id;
@@ -1071,10 +1074,11 @@ function openProductionReport(order) {
   renderMobileView();
   const form = document.getElementById("production-form");
   form.elements.orderId.value = order.id;
-  form.elements.producedQuantity.value = order.quantity;
-  form.elements.producedQuantity.max = order.quantity;
+  form.elements.productionDate.value = dateOnly(allocation.date);
+  form.elements.producedQuantity.value = allocation.quantity;
+  form.elements.producedQuantity.max = allocation.quantity;
   document.getElementById("production-title").textContent = `回報 ${order.id}`;
-  document.getElementById("production-context").textContent = `總量 ${order.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於總量，未生產部分會保留同一訂單編號並回到待排程。`;
+  document.getElementById("production-context").textContent = `生產日期 ${dateOnly(allocation.date)}，本日排程 ${allocation.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於本日排程量，未生產部分會保留同一訂單編號並回到待排程。`;
   const dialog = document.getElementById("production-dialog");
   if (typeof dialog.showModal === "function" && !dialog.open) {
     dialog.showModal();
@@ -1097,7 +1101,17 @@ function closeProductionReport() {
   }
 }
 
-async function submitProductionReport(orderId, producedQuantity) {
+function productionAllocationForOrder(orderId, productionDate = "") {
+  const allocations = state.calendarAllocations
+    .filter((allocation) => allocation.orderId === orderId && allocation.status !== statuses[3])
+    .sort((a, b) => dateOnly(a.date).localeCompare(dateOnly(b.date)));
+  if (productionDate) {
+    return allocations.find((allocation) => dateOnly(allocation.date) === productionDate);
+  }
+  return allocations[0];
+}
+
+async function submitProductionReport(orderId, productionDate, producedQuantity) {
   const order = state.orders.find((item) => item.id === orderId);
   if (!order) {
     showMessage("找不到訂單", "請重新整理後再試一次。", "warn");
@@ -1107,14 +1121,19 @@ async function submitProductionReport(orderId, producedQuantity) {
     showMessage("片數不正確", "已完成片數必須是大於 0 的整數。", "warn");
     return;
   }
-  if (producedQuantity > order.quantity) {
-    showMessage("片數超過總量", `完成片數不可大於 ${order.quantity.toLocaleString()} 片。`, "warn");
+  const allocation = productionAllocationForOrder(orderId, productionDate);
+  if (!allocation) {
+    showMessage("找不到排程", "請從日曆上的排程日期回報生產。", "warn");
+    return;
+  }
+  if (producedQuantity > allocation.quantity) {
+    showMessage("片數超過本日排程", `完成片數不可大於 ${allocation.quantity.toLocaleString()} 片。`, "warn");
     return;
   }
   try {
     const payload = await request("/api/production/confirm", {
       method: "POST",
-      body: JSON.stringify({ orderId, producedQuantity }),
+      body: JSON.stringify({ orderId, productionDate, producedQuantity }),
     });
     closeProductionReport();
     const suffix = payload.remainder ? `，${payload.remainder.id} 剩餘 ${payload.remainder.quantity.toLocaleString()} 片已回到待排程` : "，已全數完成";

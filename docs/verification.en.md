@@ -152,8 +152,9 @@ Submit jobs for different lines:
 - Confirm the login form is hidden after login and the header shows the current username plus logout.
 - Login as `admin` / `demo`, confirm the Admin panel is visible, and confirm non-admin users do not see it.
 - Toggle exact filters for customer, line, and priority; confirm status behaves as a single-select filter and the customer menu only lists customers matching the active status/priority scope.
-- As a scheduler, click a scheduled calendar order to start production, then click the in-progress calendar order to open production reporting.
-- Submit a partial production quantity and confirm the same order ID returns to pending scheduling with the remaining quantity.
+- As a scheduler, drag a pending order with a later due date onto a chosen non-past calendar date, accept the preview, and confirm the persisted calendar allocation stays on the dropped date.
+- As a scheduler, click a scheduled calendar order to start production, then click the in-progress calendar allocation for the intended production date to open production reporting.
+- Submit a partial production quantity and confirm the calendar keeps that date's completed quantity while the same order ID returns to pending scheduling with the remaining quantity.
 - Create a sales draft order preview, confirm the preview page highlights calendar results, then confirm it into pending orders.
 - As a scheduler, select pending orders, preview first, then confirm execution from the preview page. A direct schedule job API call without `previewId` must fail.
 - Delete selected pending/scheduled orders and confirm removed scheduled allocations disappear from the calendar.

@@ -972,6 +972,10 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 			continue
 		}
 		order := s.orders[allocation.OrderID]
+		status := allocation.Status
+		if status == "" {
+			status = order.Status
+		}
 		allocations = append(allocations, calendarAllocation{
 			OrderID:  allocation.OrderID,
 			Customer: order.Customer,
@@ -979,7 +983,7 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 			Date:     allocationDate,
 			Quantity: allocation.Quantity,
 			Priority: allocation.Priority,
-			Status:   order.Status,
+			Status:   status,
 			Locked:   allocation.Locked,
 			DueDate:  order.DueDate,
 		})
@@ -1049,6 +1053,7 @@ func (s *MemoryStore) auditResourceLineLocked(entry domain.AuditEntry) string {
 
 type productionConfirmRequest struct {
 	OrderID          string `json:"orderId"`
+	ProductionDate   string `json:"productionDate"`
 	ProducedQuantity int    `json:"producedQuantity"`
 }
 
@@ -1124,8 +1129,19 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 	if req.ProducedQuantity <= 0 {
 		return productionConfirmResponse{}, errors.New("producedQuantity must be greater than zero")
 	}
-	if req.ProducedQuantity > order.Quantity {
-		return productionConfirmResponse{}, errors.New("producedQuantity cannot exceed order quantity")
+	productionDate, err := time.Parse(dateLayout, req.ProductionDate)
+	if err != nil {
+		return productionConfirmResponse{}, errors.New("productionDate must use YYYY-MM-DD")
+	}
+	allocation, ok := s.productionAllocationLocked(order.ID, productionDate)
+	if !ok {
+		return productionConfirmResponse{}, errors.New("scheduled allocation not found for productionDate")
+	}
+	if allocation.Status == domain.StatusCompleted {
+		return productionConfirmResponse{}, errors.New("productionDate has already been confirmed")
+	}
+	if req.ProducedQuantity > allocation.Quantity {
+		return productionConfirmResponse{}, errors.New("producedQuantity cannot exceed scheduled allocation quantity")
 	}
 	result, err := scheduler.ConfirmProduction(order, req.ProducedQuantity, time.Now().UTC())
 	if err != nil {
@@ -1135,6 +1151,7 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 		order.Status = domain.StatusCompleted
 		order.UpdatedAt = time.Now().UTC()
 		s.orders[order.ID] = order
+		s.completeProductionAllocationLocked(order.ID, productionDate, req.ProducedQuantity)
 		s.auditLocked(claims.Subject, "production.confirm.complete", order.ID, "")
 		return productionConfirmResponse{Order: order}, nil
 	}
@@ -1145,7 +1162,7 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
 
-	s.removeAllocationsLocked(order.ID)
+	s.replaceOrderAllocationsWithCompletedLocked(order.ID, productionDate, req.ProducedQuantity)
 	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", remaining "+strconv.Itoa(order.Quantity)+" returned to pending")
 	return productionConfirmResponse{Order: order, Remainder: &order}, nil
 }
@@ -1278,6 +1295,7 @@ func (s *MemoryStore) persistAllocationsLocked(allocations []scheduler.Allocatio
 			Quantity: allocation.Quantity,
 			Priority: allocation.Priority,
 			Locked:   allocation.Locked,
+			Status:   domain.StatusScheduled,
 		})
 		order, ok := s.orders[allocation.OrderID]
 		if ok && order.Status == domain.StatusPending {
@@ -1361,9 +1379,65 @@ func (s *MemoryStore) removeAllocationsLocked(orderID string) {
 	s.allocations = kept
 }
 
+func (s *MemoryStore) productionAllocationLocked(orderID string, productionDate time.Time) (domain.ScheduleAllocation, bool) {
+	date := truncateDate(productionDate)
+	var completed domain.ScheduleAllocation
+	for _, allocation := range s.allocations {
+		if allocation.OrderID == orderID && truncateDate(allocation.Date).Equal(date) {
+			if allocation.Status == domain.StatusCompleted {
+				completed = allocation
+				continue
+			}
+			return allocation, true
+		}
+	}
+	if completed.OrderID != "" {
+		return completed, true
+	}
+	return domain.ScheduleAllocation{}, false
+}
+
+func (s *MemoryStore) completeProductionAllocationLocked(orderID string, productionDate time.Time, producedQuantity int) {
+	date := truncateDate(productionDate)
+	for index, allocation := range s.allocations {
+		if allocation.OrderID == orderID && truncateDate(allocation.Date).Equal(date) && allocation.Status != domain.StatusCompleted {
+			s.allocations[index].Quantity = producedQuantity
+			s.allocations[index].Locked = true
+			s.allocations[index].Status = domain.StatusCompleted
+			return
+		}
+	}
+}
+
+func (s *MemoryStore) replaceOrderAllocationsWithCompletedLocked(orderID string, productionDate time.Time, producedQuantity int) {
+	date := truncateDate(productionDate)
+	completed := domain.ScheduleAllocation{}
+	kept := s.allocations[:0]
+	for _, allocation := range s.allocations {
+		if allocation.OrderID != orderID {
+			kept = append(kept, allocation)
+			continue
+		}
+		if allocation.Status == domain.StatusCompleted {
+			kept = append(kept, allocation)
+			continue
+		}
+		if truncateDate(allocation.Date).Equal(date) && completed.OrderID == "" {
+			completed = allocation
+			completed.Quantity = producedQuantity
+			completed.Locked = true
+			completed.Status = domain.StatusCompleted
+		}
+	}
+	if completed.OrderID != "" {
+		kept = append(kept, completed)
+	}
+	s.allocations = kept
+}
+
 func (s *MemoryStore) hasAllocationLocked(orderID string) bool {
 	for _, allocation := range s.allocations {
-		if allocation.OrderID == orderID {
+		if allocation.OrderID == orderID && allocation.Status != domain.StatusCompleted {
 			return true
 		}
 	}
@@ -1372,8 +1446,9 @@ func (s *MemoryStore) hasAllocationLocked(orderID string) bool {
 
 func (s *MemoryStore) lockAllocationsLocked(orderID string) {
 	for index, allocation := range s.allocations {
-		if allocation.OrderID == orderID {
+		if allocation.OrderID == orderID && allocation.Status != domain.StatusCompleted {
 			s.allocations[index].Locked = true
+			s.allocations[index].Status = domain.StatusInProgress
 		}
 	}
 }
