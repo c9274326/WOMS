@@ -141,12 +141,13 @@ docker compose up --build
 - admin ?臬 Admin panel ?晷撣唾?閫??scheduler ?撅祉蝺???admin ?澆?? `403`??
 - ?桀??Ｙ??豢??典? sales/admin ?身?箏??詨??雿??Ｙ?嚗cheduler ??摰?撅祉蝺?
 - 蝎暹?蝭拚?舀摰Ｘ????恥?嗆?粹?桀?蝭拚嚗??桃??撌血???踵?嗚?
+- 精準篩選支援客戶與優先級；客戶改為點擊後展開的選單，且選項會依目前狀態與優先級篩選同步縮小。
 - 閮??摮蝯梯??桀??詨??Ｙ???
 - 月曆會顯示完整六週頁面範圍內正式保存的排程產能，包含相鄰月份日期；水位主要顯示當日剩餘可排片數。試排 allocation 只會出現在試排確認頁，不會混入主月曆。
 - sales 只能加入客戶訂單到待排程；草稿可行性會與既有已排程配置檢查，不會把其他待排程訂單一起試算。Order notes are write-on-create only; rejected-order resubmission can adjust due date and quantity but cannot rewrite the original note。
 - scheduler 可以先預覽已選取的待排程訂單，也可以把待排程訂單拖到任何可見且非過去的月曆日期。拖曳排程會以當日作為最快起排日並優先填入最早可用產能，因此未來交期訂單會先吃掉今天剩餘產能，再使用交期日產能。發生衝突時，preview 頁會顯示分配計畫、建議提前開始日、單筆訂單交期修改重試，以及允許時的人工強制介入重新試排。人工介入必須填寫原因並逐項確認衝突清單後才會接受任務；缺少 `previewId` 的直接排程 API 會被拒絕。
 - scheduler workflow history 是從 backend audit data 載入，透過 `GET /api/schedules/history` 顯示 scheduler 所屬產線的 schedule jobs、manual force、rejected orders 與 production events。
-- 已排程訂單可以轉入生產中。開始生產會鎖住該訂單所有 allocation。生產中訂單可以回報全部完成或部分完成；部分完成會把已生產數量結案，並將未生產 allocation 轉給剩餘數量的已排程子訂單。
+- 已排程訂單可以從訂單列表或月曆訂單點擊後轉入生產中。開始生產會鎖住該訂單所有 allocation。生產中訂單可以從訂單列表或月曆回報全部完成或部分完成；部分完成會把已生產數量寫入 workflow history，並讓同一張訂單編號以剩餘數量回到待排程。
 - `scheduler-a` demo 閮 `ORD-2` 撌脰?銝?demo allocation嚗?甇斗?憿舐內?冽???
 - 銵?皜祈岫???遣蝡?撘萄??亙之???殷??嫣噶??preview ?銵??勗???
 

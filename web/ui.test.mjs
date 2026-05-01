@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   defaultLine,
   conflictExplanation,
+  customerFilterValues,
   escapeHtml,
   exactFilterOrders,
   groupAllocationsByDate,
@@ -68,6 +69,24 @@ test("exactFilterOrders treats status as single-select", () => {
     priorities: new Set(),
   });
   assert.deepEqual(result.map((item) => item.id), ["ORD-2"]);
+});
+
+test("customerFilterValues follows the active exact filters except customer", () => {
+  const orders = [
+    { id: "ORD-1", customer: "TSMC Demo", status: "pending", priority: "high" },
+    { id: "ORD-2", customer: "ACME", status: "scheduled", priority: "low" },
+    { id: "ORD-3", customer: "ACME Silicon", status: "pending", priority: "low" },
+  ];
+  assert.deepEqual(customerFilterValues(orders, {
+    customers: new Set(),
+    status: "pending",
+    priorities: new Set(),
+  }), ["ACME Silicon", "TSMC Demo"]);
+  assert.deepEqual(customerFilterValues(orders, {
+    customers: new Set(["ACME"]),
+    status: "scheduled",
+    priorities: new Set(["low"]),
+  }), ["ACME"]);
 });
 
 test("sortOrdersForWorkstation sorts by workflow, due date, and natural order number", () => {

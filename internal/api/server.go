@@ -1140,20 +1140,14 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 	}
 
 	originalQuantity := order.Quantity
-	order.Quantity = req.ProducedQuantity
-	order.Status = domain.StatusCompleted
+	order.Quantity = originalQuantity - req.ProducedQuantity
+	order.Status = domain.StatusPending
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
 
-	remainder := *result.Remainder
-	remainder.ID = "ORD-" + strconv.Itoa(s.nextOrderID)
-	s.nextOrderID++
-	if s.splitAllocationsForProducedLocked(order.ID, remainder.ID, req.ProducedQuantity) {
-		remainder.Status = domain.StatusScheduled
-	}
-	s.orders[remainder.ID] = remainder
-	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", created remainder "+remainder.ID)
-	return productionConfirmResponse{Order: order, Remainder: &remainder}, nil
+	s.removeAllocationsLocked(order.ID)
+	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", remaining "+strconv.Itoa(order.Quantity)+" returned to pending")
+	return productionConfirmResponse{Order: order, Remainder: &order}, nil
 }
 
 func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (scheduler.Result, error) {
@@ -1382,50 +1376,6 @@ func (s *MemoryStore) lockAllocationsLocked(orderID string) {
 			s.allocations[index].Locked = true
 		}
 	}
-}
-
-func (s *MemoryStore) splitAllocationsForProducedLocked(orderID, remainderID string, produced int) bool {
-	sort.SliceStable(s.allocations, func(i, j int) bool {
-		if s.allocations[i].OrderID == orderID && s.allocations[j].OrderID != orderID {
-			return true
-		}
-		if s.allocations[i].OrderID != orderID && s.allocations[j].OrderID == orderID {
-			return false
-		}
-		if !s.allocations[i].Date.Equal(s.allocations[j].Date) {
-			return s.allocations[i].Date.Before(s.allocations[j].Date)
-		}
-		return s.allocations[i].OrderID < s.allocations[j].OrderID
-	})
-	remainingProduced := produced
-	remainderAllocated := false
-	kept := s.allocations[:0]
-	for _, allocation := range s.allocations {
-		if allocation.OrderID != orderID {
-			kept = append(kept, allocation)
-			continue
-		}
-		if remainingProduced >= allocation.Quantity {
-			allocation.Locked = true
-			remainingProduced -= allocation.Quantity
-			kept = append(kept, allocation)
-			continue
-		}
-		if remainingProduced > 0 {
-			producedAllocation := allocation
-			producedAllocation.Quantity = remainingProduced
-			producedAllocation.Locked = true
-			kept = append(kept, producedAllocation)
-			allocation.Quantity -= remainingProduced
-			remainingProduced = 0
-		}
-		allocation.OrderID = remainderID
-		allocation.Locked = allocation.Priority == domain.PriorityHigh
-		kept = append(kept, allocation)
-		remainderAllocated = true
-	}
-	s.allocations = kept
-	return remainderAllocated
 }
 
 func validateOrderRequest(req createOrderRequest, lines map[string]domain.ProductionLine) (time.Time, error) {

@@ -96,7 +96,7 @@ func Plan(req Request) (Result, error) {
 			}
 			continue
 		}
-		if allocation.Priority == domain.PriorityHigh || allocation.Locked {
+		if allocation.Locked {
 			highUsed[key] += allocation.Quantity
 			lockedByDate[key] = appendUnique(lockedByDate[key], allocation.OrderID)
 			continue
@@ -130,7 +130,7 @@ func Plan(req Request) (Result, error) {
 			}
 
 			used := highUsed[key] + newUsed[key]
-			if order.Priority != domain.PriorityHigh && !req.ManualForce {
+			if !req.ManualForce {
 				used += lowUsed[key]
 			}
 			available := req.CapacityPerDay - used
@@ -154,7 +154,7 @@ func Plan(req Request) (Result, error) {
 				result.FinishDate = day
 			}
 
-			if order.Priority == domain.PriorityHigh || req.ManualForce {
+			if req.ManualForce {
 				affected := append([]string{}, lowByDate[key]...)
 				if req.ManualForce {
 					affected = appendUniqueMany(affected, lockedByDate[key])
@@ -210,7 +210,7 @@ func estimateFinishDate(req Request, order OrderInput, start time.Time, remainin
 	for remaining > 0 {
 		key := dateKey(day)
 		used := highUsed[key] + newUsed[key]
-		if order.Priority != domain.PriorityHigh && !req.ManualForce {
+		if !req.ManualForce {
 			used += lowUsed[key]
 		}
 		available := req.CapacityPerDay - used

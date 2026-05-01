@@ -1,5 +1,6 @@
 import {
   conflictExplanation,
+  customerFilterValues,
   defaultLine,
   escapeHtml,
   exactFilterOrders,
@@ -11,7 +12,6 @@ import {
   sortOrdersForWorkstation,
   statusClass,
   statusCounts,
-  uniqueValues,
   waterlineMetrics,
 } from "./ui.js";
 
@@ -592,13 +592,27 @@ function renderFilters() {
 function renderCustomerFilter() {
   const container = document.getElementById("customer-filter");
   const current = Array.from(state.filters.customers)[0] ?? "";
-  const customers = uniqueValues(visibleLineOrders(), "customer");
+  const customers = customerFilterValues(visibleLineOrders(), state.filters);
   const nextCurrent = current && customers.includes(current) ? current : "";
   if (nextCurrent !== current) {
     state.filters.customers.clear();
   }
   const options = [{ value: "", label: "全部" }, ...customers.map((customer) => ({ value: customer, label: customer }))];
+  const activeLabel = options.find((option) => option.value === nextCurrent)?.label ?? "全部";
   container.innerHTML = "";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "filter-menu-toggle";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.textContent = activeLabel;
+  const menu = document.createElement("div");
+  menu.className = "filter-menu";
+  menu.hidden = true;
+  toggle.addEventListener("click", () => {
+    const open = menu.hidden;
+    menu.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+  });
   for (const option of options) {
     const button = document.createElement("button");
     button.type = "button";
@@ -609,11 +623,14 @@ function renderCustomerFilter() {
       if (option.value) {
         state.filters.customers.add(option.value);
       }
+      menu.hidden = true;
+      toggle.setAttribute("aria-expanded", "false");
       renderCustomerFilter();
       renderOrders();
     });
-    container.appendChild(button);
+    menu.appendChild(button);
   }
+  container.append(toggle, menu);
 }
 
 function renderCheckboxGroup(containerId, values, selected, labelFor) {
@@ -633,6 +650,7 @@ function renderCheckboxGroup(containerId, values, selected, labelFor) {
       } else {
         selected.delete(value);
       }
+      renderCustomerFilter();
       renderOrders();
     });
     container.appendChild(label);
@@ -654,6 +672,7 @@ function renderStatusSidebar() {
     button.addEventListener("click", () => {
       state.filters.status = state.filters.status === status ? "" : status;
       renderStatusSidebar();
+      renderFilters();
       renderOrders();
     });
     container.appendChild(button);
@@ -703,6 +722,12 @@ function renderCalendar() {
     });
     grid.appendChild(cell);
   }
+  grid.querySelectorAll("[data-calendar-order-id]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      handleCalendarOrderClick(button.dataset.calendarOrderId);
+    });
+  });
 }
 
 function droppedOrderIds(dataTransfer) {
@@ -881,13 +906,33 @@ function renderWaterline(allocations) {
 }
 
 function renderCalendarItem(allocation) {
+  const actionable = !allocation.preview && (allocation.status === statuses[1] || allocation.status === statuses[2]);
+  const tag = actionable ? "button" : "div";
+  const attrs = actionable
+    ? `type="button" data-calendar-order-id="${escapeHtml(allocation.orderId)}"`
+    : "";
   return `
-    <div class="calendar-item ${priorityClass(allocation.priority)} ${allocation.preview ? "preview-item-inline" : ""}">
+    <${tag} class="calendar-item ${priorityClass(allocation.priority)} ${allocation.preview ? "preview-item-inline" : ""}" ${attrs}>
       <strong>${escapeHtml(allocation.orderId)}</strong>
       <span>${escapeHtml(allocation.customer ?? "Preview")} · ${allocation.quantity.toLocaleString()} 片</span>
       <span>${priorityLabel(allocation.priority)} · ${escapeHtml(allocation.status ?? "試排")}</span>
-    </div>
+    </${tag}>
   `;
+}
+
+function handleCalendarOrderClick(orderId) {
+  const order = state.orders.find((item) => item.id === orderId);
+  if (!order) {
+    showMessage("找不到訂單", `${orderId} 不在目前工作站訂單清單內。`, "warn");
+    return;
+  }
+  if (order.status === statuses[1]) {
+    handleOrderAction("start-production", orderId);
+    return;
+  }
+  if (order.status === statuses[2]) {
+    handleOrderAction("confirm-production", orderId);
+  }
 }
 
 function renderOrderAction(order) {
@@ -1029,7 +1074,7 @@ function openProductionReport(order) {
   form.elements.producedQuantity.value = order.quantity;
   form.elements.producedQuantity.max = order.quantity;
   document.getElementById("production-title").textContent = `回報 ${order.id}`;
-  document.getElementById("production-context").textContent = `總量 ${order.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於總量，未生產部分會保留既有排程成為子訂單。`;
+  document.getElementById("production-context").textContent = `總量 ${order.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於總量，未生產部分會保留同一訂單編號並回到待排程。`;
   const dialog = document.getElementById("production-dialog");
   if (typeof dialog.showModal === "function" && !dialog.open) {
     dialog.showModal();
@@ -1072,7 +1117,7 @@ async function submitProductionReport(orderId, producedQuantity) {
       body: JSON.stringify({ orderId, producedQuantity }),
     });
     closeProductionReport();
-    const suffix = payload.remainder ? `，剩餘 ${payload.remainder.quantity.toLocaleString()} 片已沿用排程建立為 ${payload.remainder.id}` : "，已全數完成";
+    const suffix = payload.remainder ? `，${payload.remainder.id} 剩餘 ${payload.remainder.quantity.toLocaleString()} 片已回到待排程` : "，已全數完成";
     showMessage("生產回報完成", `${orderId} 已更新${suffix}。`);
     await refreshWorkspace();
   } catch (error) {

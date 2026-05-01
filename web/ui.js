@@ -14,6 +14,14 @@ export function exactFilterOrders(orders, filters) {
   });
 }
 
+export function customerFilterValues(orders, filters) {
+  const candidateFilters = {
+    ...filters,
+    customers: new Set(),
+  };
+  return uniqueValues(exactFilterOrders(orders, candidateFilters), "customer");
+}
+
 export function sortOrdersForWorkstation(orders) {
   return [...orders].sort((a, b) => {
     const statusDelta = orderStatusRank(a.status) - orderStatusRank(b.status);
