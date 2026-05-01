@@ -10,6 +10,7 @@
 bin/
 coverage.out
 *.test
+.gocache/
 
 # Docker and local volumes
 .docker/
@@ -27,7 +28,7 @@ charts/
 *.log
 tmp/
 .tmp/
-.tmp-*.txt
+.tmp-*
 *.pid
 
 # OS and editor files

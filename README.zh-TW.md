@@ -1,14 +1,14 @@
-<p align="center">
+﻿<p align="center">
   <strong>WOMS</strong>
 </p>
 
 <p align="center">
-  晶圓訂單管理與排程系統
+  ?嗅?閮蝞∠???蝔頂蝯?
 </p>
 
 <p align="center">
   <a href="README.md">English</a> |
-  <a href="README.zh-TW.md">繁體中文</a>
+  <a href="README.zh-TW.md">蝜?銝剜?</a>
 </p>
 
 <p align="center">
@@ -20,13 +20,13 @@
 
 ---
 
-WOMS 是以最終部署型態開發的晶圓訂單管理與排程系統。目標是讓業務人員建立與追蹤訂單，讓排程工程師依產線管理排程、處理衝突、回填每日產量，並透過 Kafka、Redis、KEDA 與 Kubernetes 支撐非同步重排與擴展。
+WOMS ?臭誑?蝯蝵脣????潛??嗅?閮蝞∠???蝔頂蝯晞璅霈平?犖?∪遣蝡?餈質馱閮嚗???撌亦?撣思??Ｙ?蝞∠???????蝒?憛急??亦??銝阡? Kafka?edis?EDA ??Kubernetes ?舀???甇仿????游???
 
-## 系統架構
+## 蝟餌絞?嗆?
 
 ```mermaid
 flowchart LR
-  User[使用者] --> Ingress[NGINX Ingress / HTTPS]
+  User[雿輻? --> Ingress[NGINX Ingress / HTTPS]
   Ingress --> Web[Static Web / NGINX]
   Ingress --> API[Go API]
   API --> Auth[JWT + RBAC]
@@ -39,29 +39,29 @@ flowchart LR
   KEDA[KEDA ScaledObject] --> Worker
 ```
 
-### 部署單元
+### ?函蔡?桀?
 
-- `web`: 原生 HTML/CSS/JS 前端，由 NGINX serve。
-- `api`: Go REST API，負責 JWT、RBAC、訂單、試排程、排程任務、回填與 audit log。
-- `scheduler-worker`: Go worker，未來接 Kafka consumer 處理非同步排程。
-- `deploy/helm/woms`: Kubernetes Helm chart，包含 API、worker、web、Ingress 與 KEDA。
+- `web`: ?? HTML/CSS/JS ?垢嚗 NGINX serve??
+- `api`: Go REST API嚗?鞎?JWT?BAC???柴岫????蝔遙??憛怨? audit log??
+- `scheduler-worker`: Go worker嚗靘 Kafka consumer ????甇交?蝔?
+- `deploy/helm/woms`: Kubernetes Helm chart嚗???API?orker?eb?ngress ??KEDA??
 
 ## Prerequirements
 
-本機目前需要先安裝下列工具：
+?祆??桀??閬?摰?銝?撌亙嚗?
 
 - Git
 - Go 1.22+
-- Docker 或 Docker Desktop
+- Docker ??Docker Desktop
 - Docker Compose
 - kubectl
 - Helm 3
-- Kubernetes cluster，例如 Docker Desktop Kubernetes、kind、minikube 或雲端 K8s
+- Kubernetes cluster嚗?憒?Docker Desktop Kubernetes?ind?inikube ?蝡?K8s
 - NGINX Ingress Controller
 - KEDA
-- metrics-server，若要驗證 CPU autoscaling
+- metrics-server嚗閬?霅?CPU autoscaling
 
-可用指令確認：
+?舐?誘蝣箄?嚗?
 
 ```bash
 go version
@@ -71,62 +71,62 @@ kubectl version --client=true
 helm version
 ```
 
-## 專案設定
+## 撠?閮剖?
 
-複製環境變數範例：
+銴ˊ?啣?霈蝭?嚗?
 
 ```bash
 cp .env.example .env
 ```
 
-重要設定：
+??閮剖?嚗?
 
-- `JWT_SECRET`: JWT 簽章密鑰，正式環境必須替換。
-- `DEMO_SEED_DATA`: 預設 `true`，若要關閉 demo 訂單可設為 `false`。
-- `DATABASE_URL`: PostgreSQL 連線字串。
-- `REDIS_ADDR`: Redis 位址。
-- `KAFKA_BROKERS`: Kafka broker 清單。
-- `KAFKA_SCHEDULE_TOPIC`: 排程任務 topic。
-- `DOCKERHUB_NAMESPACE`: Docker Hub namespace。
-- `WOMS_IMAGE_TAG`: Docker Compose 使用的 image tag。預設為 `latest`，讓 Compose build 與本機啟動時使用的 tag 與 Docker Hub `latest` 保持一致。
+- `JWT_SECRET`: JWT 蝪賜?撖嚗迤撘憓????
+- `DEMO_SEED_DATA`: ?身 `true`嚗閬???demo 閮?航身??`false`??
+- `DATABASE_URL`: PostgreSQL ???摮葡??
+- `REDIS_ADDR`: Redis 雿???
+- `KAFKA_BROKERS`: Kafka broker 皜??
+- `KAFKA_SCHEDULE_TOPIC`: ??隞餃? topic??
+- `DOCKERHUB_NAMESPACE`: Docker Hub namespace??
+- `WOMS_IMAGE_TAG`: Docker Compose 雿輻??image tag??閮剔 `latest`嚗? Compose build ?璈???雿輻??tag ??Docker Hub `latest` 靽?銝?氬?
 
-GitHub Actions Docker Hub 設定：
+GitHub Actions Docker Hub 閮剖?嚗?
 
-- Repository secret `DOCKERHUB_TOKEN`: Docker Hub Personal Access Token，權限需 Read & Write。
-- Repository variable `DOCKERHUB_USERNAME`: Docker Hub username。
-- Repository variable `DOCKERHUB_NAMESPACE`: Docker Hub username 或 organization namespace。
-- 使用 repository-level Actions 設定即可。目前 workflows 沒有宣告 `environment:`，不需要 environment-level settings。
+- Repository secret `DOCKERHUB_TOKEN`: Docker Hub Personal Access Token嚗??? Read & Write??
+- Repository variable `DOCKERHUB_USERNAME`: Docker Hub username??
+- Repository variable `DOCKERHUB_NAMESPACE`: Docker Hub username ??organization namespace??
+- 雿輻 repository-level Actions 閮剖??喳???workflows 瘝?摰?? `environment:`嚗??閬?environment-level settings??
 
-Demo 帳號：
+Demo 撣唾?嚗?
 
-- 管理員：`admin` / `demo`
-- 業務：`sales` / `demo`
-- A 線排程：`scheduler-a` / `demo`
-- B 線排程：`scheduler-b` / `demo`
-- C 線排程：`scheduler-c` / `demo`
-- D 線排程：`scheduler-d` / `demo`
+- 蝞∠??∴?`admin` / `demo`
+- 璆剖?嚗sales` / `demo`
+- A 蝺?蝔?`scheduler-a` / `demo`
+- B 蝺?蝔?`scheduler-b` / `demo`
+- C 蝺?蝔?`scheduler-c` / `demo`
+- D 蝺?蝔?`scheduler-d` / `demo`
 
-## 本機開發
+## ?祆??
 
-執行測試：
+?瑁?皜祈岫嚗?
 
 ```bash
 go test ./...
 ```
 
-啟動 API：
+?? API嚗?
 
 ```bash
 JWT_SECRET=local-dev-secret go run ./cmd/api
 ```
 
-使用 Docker Compose 啟動：
+雿輻 Docker Compose ??嚗?
 
 ```bash
 docker compose up --build
 ```
 
-預設服務：
+?身??嚗?
 
 - API: `http://localhost:8080`
 - Web: `http://localhost:8081`
@@ -134,28 +134,27 @@ docker compose up --build
 - Redis: `localhost:6379`
 - Kafka: `localhost:9092`
 
-前端行為：
+?垢銵嚗?
 
-- 未登入時會先進入獨立登入頁；有效 session 存在前不會顯示內部頁面。
-- 登入狀態會存在瀏覽器 `localStorage`，重新整理後會保留 session，直到 JWT 過期或被 API 拒絕。
-- admin 可在 Admin panel 指派帳號角色與 scheduler 所屬產線；非 admin 呼叫會回 `403`。
-- 目前產線選擇器對 sales/admin 預設為字典序最低的產線，scheduler 則鎖定在所屬產線。
-- 精準篩選支援客戶與優先級。客戶改為選單式篩選，訂單狀態由左側狀態面板控制。
-- 訂單狀態數字只統計目前選定產線。
-- 月曆每日只顯示正式保存的排程產能，水位主要顯示當日剩餘可排片數；試排 allocation 只會出現在試排確認頁，不會混入主月曆。
-- sales 只能加入客戶訂單到待排程；草稿可行性會與既有已排程配置檢查，不會把其他待排程訂單一起試算。訂單備註只能在建立訂單時寫入；被駁回訂單重新送出時只能調整交期與數量，不能改寫原備註。
-- scheduler 可以先預覽已選取的待排程訂單，也可以直接把單張待排程訂單拖到月曆日期。拖曳後若無衝突會立即正式排程；若有衝突則開啟衝突處理頁。排程會從指定開始日期往後填入最早可用產能，讓排程盡早完成。發生衝突時，preview 頁會顯示分配計畫、建議提前開始日、單筆訂單交期修改重試，以及允許時的人工強制介入重新試排。人工介入必須填寫原因並逐項確認衝突清單後才會接受任務；缺少 `previewId` 的直接排程 API 會被拒絕。
-- scheduler workflow history 會從後端 audit 資料透過 `GET /api/schedules/history` 載入，只顯示該 scheduler 所屬產線的排程任務、人工介入、駁回訂單與生產事件。
-- 已排程訂單可以轉入生產中。開始生產會鎖住該訂單所有 allocation。生產中訂單會在獨立 production modal 回報全部完成或部分完成；部分完成會把已生產數量結案，並為剩餘數量建立待排程子訂單。
-- 權限不足、操作錯誤與操作結果會以彈出訊息視窗顯示。
-- `scheduler-a` demo 訂單 `ORD-2` 已補上 demo allocation，因此會顯示在月曆。
-- 衝突測試按鈕會建立多張同日大量訂單，方便在 preview 看到衝突報告。
+- ?芰?交????脣?函??餃???? session 摮???＊蝷箏?券??Ｕ?
+- ?餃???摮?汗??`localStorage`嚗??唳??????session嚗??JWT ???◤ API ????
+- admin ?臬 Admin panel ?晷撣唾?閫??scheduler ?撅祉蝺???admin ?澆?? `403`??
+- ?桀??Ｙ??豢??典? sales/admin ?身?箏??詨??雿??Ｙ?嚗cheduler ??摰?撅祉蝺?
+- 蝎暹?蝭拚?舀摰Ｘ????恥?嗆?粹?桀?蝭拚嚗??桃??撌血???踵?嗚?
+- 閮??摮蝯梯??桀??詨??Ｙ???
+- 月曆會顯示完整六週頁面範圍內正式保存的排程產能，包含相鄰月份日期；水位主要顯示當日剩餘可排片數。試排 allocation 只會出現在試排確認頁，不會混入主月曆。
+- sales 只能加入客戶訂單到待排程；草稿可行性會與既有已排程配置檢查，不會把其他待排程訂單一起試算。Order notes are write-on-create only; rejected-order resubmission can adjust due date and quantity but cannot rewrite the original note。
+- scheduler 可以先預覽已選取的待排程訂單，也可以把待排程訂單拖到任何可見且非過去的月曆日期。拖曳排程會以當日作為最快起排日並優先填入最早可用產能，因此未來交期訂單會先吃掉今天剩餘產能，再使用交期日產能。發生衝突時，preview 頁會顯示分配計畫、建議提前開始日、單筆訂單交期修改重試，以及允許時的人工強制介入重新試排。人工介入必須填寫原因並逐項確認衝突清單後才會接受任務；缺少 `previewId` 的直接排程 API 會被拒絕。
+- scheduler workflow history 是從 backend audit data 載入，透過 `GET /api/schedules/history` 顯示 scheduler 所屬產線的 schedule jobs、manual force、rejected orders 與 production events。
+- 已排程訂單可以轉入生產中。開始生產會鎖住該訂單所有 allocation。生產中訂單可以回報全部完成或部分完成；部分完成會把已生產數量結案，並將未生產 allocation 轉給剩餘數量的已排程子訂單。
+- `scheduler-a` demo 閮 `ORD-2` 撌脰?銝?demo allocation嚗?甇斗?憿舐內?冽???
+- 銵?皜祈岫???遣蝡?撘萄??亙之???殷??嫣噶??preview ?銵??勗???
 
-資料持久化說明：
+鞈????牧??
 
-- Docker Compose 的 PostgreSQL 使用 `postgres-data` named volume，因此本機 DB 資料會在 container 重啟後保留。
-- 目前 foundation API 仍使用 in-memory store。PostgreSQL migration 與 seed files 已存在，但 API 寫入 PostgreSQL 的 persistence wiring 會在後續 feature slice 完成。
-- Helm chart 目前使用 `DATABASE_URL` 連接資料庫，尚未內建 PostgreSQL StatefulSet/PVC。
+- Docker Compose ??PostgreSQL 雿輻 `postgres-data` named volume嚗?甇斗璈?DB 鞈?? container ??敺???
+- ?桀? foundation API 隞蝙??in-memory store?ostgreSQL migration ??seed files 撌脣??剁?雿?API 撖怠 PostgreSQL ??persistence wiring ?敺? feature slice 摰???
+- Helm chart ?桀?雿輻 `DATABASE_URL` ??鞈?摨恬?撠?批遣 PostgreSQL StatefulSet/PVC??
 
 ## Docker Build
 
@@ -165,11 +164,11 @@ docker build -f Dockerfile.worker -t woms-scheduler-worker:local .
 docker build -f Dockerfile.web -t woms-web:local .
 ```
 
-## Kubernetes 部署
+## Kubernetes ?函蔡
 
-先確認 cluster 已安裝 NGINX Ingress、KEDA 與 metrics-server。
+?Ⅱ隤?cluster 撌脣?鋆?NGINX Ingress?EDA ??metrics-server??
 
-Render Helm：
+Render Helm嚗?
 
 ```bash
 helm template woms ./deploy/helm/woms \
@@ -181,7 +180,7 @@ helm template woms ./deploy/helm/woms \
   --set web.image.tag=<tag>
 ```
 
-部署：
+?函蔡嚗?
 
 ```bash
 helm upgrade --install woms ./deploy/helm/woms \
@@ -198,52 +197,52 @@ helm upgrade --install woms ./deploy/helm/woms \
 
 ## CI/CD
 
-GitHub Actions 會執行：
+GitHub Actions ?銵?
 
 - `go test ./...`
 - `npm run test:web`
-- `gofmt` 檢查
-- API、worker、web Docker build
+- `gofmt` 瑼Ｘ
+- API?orker?eb Docker build
 - Helm render
-- `main`、`release/**` 或手動執行時才會 Docker Hub push 與 tag
-- `main` publish 成功後自動更新 Helm image tag
-- 每次成功 publish 到 `main` 會自動建立 Git tag，預設格式為 `v0.1.<run-number>`
+- `main`?release/**` ???銵??? Docker Hub push ??tag
+- `main` publish ??敺???Helm image tag
+- 瘥活?? publish ??`main` ??遣蝡?Git tag嚗?閮剜撘 `v0.1.<run-number>`
 
-GitHub repository 需設定：
+GitHub repository ?閮剖?嚗?
 
 - Secret: `DOCKERHUB_TOKEN`
 - Variable: `DOCKERHUB_USERNAME`
 - Variable: `DOCKERHUB_NAMESPACE`
 
-Image tags 會包含 release tag，以及 protected main/release publish flow 的 `latest`。`docker-publish` workflow 會把 release tag 回寫到 `deploy/helm/woms/values.yaml` 並用 `[skip ci]` commit，之後建立對應 Git tag。
+Image tags ????release tag嚗誑??protected main/release publish flow ??`latest`?docker-publish` workflow ?? release tag ?神??`deploy/helm/woms/values.yaml` 銝衣 `[skip ci]` commit嚗?敺遣蝡???Git tag??
 
-分支流程：
+?瘚?嚗?
 
-- `main` 必須存在並啟用保護。
-- 開發都在 `feat/xxxx-xxxx` 分支進行。
-- 從 `feat/...` 開 PR 到 `main` 以觸發 CI bot。
-- `docker-publish` 只在程式進入 `main`、`release/**` 或手動觸發時執行。
-- 不要在 feature branch push 時啟用 Docker Hub publishing。
+- `main` 敹?摮銝血??其?霅瑯?
+- ??賢 `feat/xxxx-xxxx` ??脰???
+- 敺?`feat/...` ??PR ??`main` 隞亥孛??CI bot??
+- `docker-publish` ?芸蝔??脣 `main`?release/**` ???孛?潭??瑁???
+- 銝???feature branch push ????Docker Hub publishing??
 
-## 實作後驗證
+## 撖虫?敺?霅?
 
-完整驗證步驟請看：
+摰撽?甇仿?隢?嚗?
 
-- [驗證指南 zh-TW](docs/verification.zh-TW.md)
+- [撽??? zh-TW](docs/verification.zh-TW.md)
 - [Verification Guide en](docs/verification.en.md)
 
-輔助腳本：
+頛?單嚗?
 
 ```bash
 BASE_URL=http://localhost:8080 ./scripts/smoke-api.sh
 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
-最低完成標準：
+?雿???皞?
 
-- API 無 token 回 `401`。
-- sales 呼叫 scheduler API 回 `403`。
-- scheduler A 不可讀寫 scheduler B 的產線資料。
-- `helm template` 可產出 Ingress 與 KEDA `ScaledObject`。
-- Kafka lag 上升時 worker replicas scale up；lag 清空後 scale down。
-- README、測試、commit、push 必須隨每項功能完成。
+- API ??token ??`401`??
+- sales ?澆 scheduler API ??`403`??
+- scheduler A 銝霈撖?scheduler B ?蝺???
+- `helm template` ?舐??Ingress ??KEDA `ScaledObject`??
+- Kafka lag 銝???worker replicas scale up嚗ag 皜征敺?scale down??
+- README?葫閰艾ommit?ush 敹??冽????賢???
