@@ -426,19 +426,24 @@ async function loadScheduleHistory() {
 }
 
 async function createPreview(requestData, kind) {
+  const payloadData = {
+    ...requestData,
+    currentDate: requestData.currentDate ?? dateInputValue(new Date()),
+  };
   const result = await request("/api/schedules/preview", {
     method: "POST",
-    body: JSON.stringify(requestData),
+    body: JSON.stringify(payloadData),
   });
   state.preview = {
     ...result,
     kind,
     request: {
-      lineId: requestData.lineId,
-      startDate: requestData.startDate,
-      orderIds: requestData.orderIds ?? [],
-      manualForce: requestData.manualForce === "on" || requestData.manualForce === true,
-      reason: requestData.reason ?? "",
+      lineId: payloadData.lineId,
+      startDate: payloadData.startDate,
+      currentDate: payloadData.currentDate,
+      orderIds: payloadData.orderIds ?? [],
+      manualForce: payloadData.manualForce === "on" || payloadData.manualForce === true,
+      reason: payloadData.reason ?? "",
     },
   };
   renderPreviewSummary();
@@ -580,30 +585,35 @@ function toggleSelectedOrder(orderId) {
 }
 
 function renderFilters() {
-  renderCustomerSelect();
+  renderCustomerFilter();
   renderCheckboxGroup("priority-filters", priorities, state.filters.priorities, priorityLabel);
 }
 
-function renderCustomerSelect() {
-  const select = document.getElementById("customer-filter");
+function renderCustomerFilter() {
+  const container = document.getElementById("customer-filter");
   const current = Array.from(state.filters.customers)[0] ?? "";
   const customers = uniqueValues(visibleLineOrders(), "customer");
   const nextCurrent = current && customers.includes(current) ? current : "";
   if (nextCurrent !== current) {
     state.filters.customers.clear();
   }
-  select.innerHTML = [
-    `<option value="">全部客戶</option>`,
-    ...customers.map((customer) => `<option value="${escapeHtml(customer)}" ${customer === nextCurrent ? "selected" : ""}>${escapeHtml(customer)}</option>`),
-  ].join("");
-  select.value = nextCurrent;
-  select.onchange = () => {
-    state.filters.customers.clear();
-    if (select.value) {
-      state.filters.customers.add(select.value);
-    }
-    renderOrders();
-  };
+  const options = [{ value: "", label: "全部" }, ...customers.map((customer) => ({ value: customer, label: customer }))];
+  container.innerHTML = "";
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `filter-chip ${option.value === nextCurrent ? "active" : ""}`;
+    button.textContent = option.label;
+    button.addEventListener("click", () => {
+      state.filters.customers.clear();
+      if (option.value) {
+        state.filters.customers.add(option.value);
+      }
+      renderCustomerFilter();
+      renderOrders();
+    });
+    container.appendChild(button);
+  }
 }
 
 function renderCheckboxGroup(containerId, values, selected, labelFor) {
@@ -673,7 +683,7 @@ function renderCalendar() {
       ${allocations.map(renderCalendarItem).join("")}
     `;
     cell.addEventListener("dragover", (event) => {
-      if (state.user?.role === "scheduler" && day.inMonth) {
+      if (canScheduleOnDate(day.key)) {
         event.preventDefault();
         cell.classList.add("drop-target");
       }
@@ -687,7 +697,7 @@ function renderCalendar() {
       event.preventDefault();
       cell.classList.remove("drop-target");
       const orderIds = droppedOrderIds(event.dataTransfer);
-      if (orderIds.length > 0 && day.inMonth) {
+      if (orderIds.length > 0 && canScheduleOnDate(day.key)) {
         await scheduleDroppedOrders(orderIds, day.key);
       }
     });
@@ -957,11 +967,13 @@ async function handleOrderAction(action, orderId) {
   }
 }
 
-async function scheduleDroppedOrders(orderIds, startDate) {
+async function scheduleDroppedOrders(orderIds) {
   try {
+    const currentDate = dateInputValue(new Date());
     const preview = await createPreview({
       lineId: activeLine(),
-      startDate,
+      startDate: currentDate,
+      currentDate,
       orderIds,
       manualForce: false,
       reason: "",
@@ -1017,7 +1029,7 @@ function openProductionReport(order) {
   form.elements.producedQuantity.value = order.quantity;
   form.elements.producedQuantity.max = order.quantity;
   document.getElementById("production-title").textContent = `回報 ${order.id}`;
-  document.getElementById("production-context").textContent = `總量 ${order.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於總量。`;
+  document.getElementById("production-context").textContent = `總量 ${order.quantity.toLocaleString()} 片，交期 ${dateOnly(order.dueDate)}。完成片數不可大於總量，未生產部分會保留既有排程成為子訂單。`;
   const dialog = document.getElementById("production-dialog");
   if (typeof dialog.showModal === "function" && !dialog.open) {
     dialog.showModal();
@@ -1060,7 +1072,7 @@ async function submitProductionReport(orderId, producedQuantity) {
       body: JSON.stringify({ orderId, producedQuantity }),
     });
     closeProductionReport();
-    const suffix = payload.remainder ? `，剩餘 ${payload.remainder.quantity.toLocaleString()} 片已建立為 ${payload.remainder.id}` : "，已全數完成";
+    const suffix = payload.remainder ? `，剩餘 ${payload.remainder.quantity.toLocaleString()} 片已沿用排程建立為 ${payload.remainder.id}` : "，已全數完成";
     showMessage("生產回報完成", `${orderId} 已更新${suffix}。`);
     await refreshWorkspace();
   } catch (error) {
@@ -1176,6 +1188,8 @@ async function submitRejectOrders() {
 function scheduleFormData() {
   const data = Object.fromEntries(new FormData(document.getElementById("schedule-form")));
   data.lineId = activeLine();
+  data.currentDate = dateInputValue(new Date());
+  data.startDate = data.currentDate;
   data.manualForce = data.manualForce === "on";
   data.orderIds = Array.from(state.selectedOrderIds);
   return data;
@@ -1302,6 +1316,10 @@ function selectableOrders() {
 function allConflictAcknowledgementsChecked() {
   const boxes = Array.from(document.querySelectorAll("[data-conflict-ack]"));
   return boxes.length === 0 || boxes.every((box) => box.checked);
+}
+
+function canScheduleOnDate(dateKey) {
+  return state.user?.role === "scheduler" && dateKey >= dateInputValue(new Date());
 }
 
 function conflictsCanBeManuallyForced(conflicts) {

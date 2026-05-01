@@ -49,6 +49,7 @@ type Request struct {
 	LineID              string
 	CapacityPerDay      int
 	StartDate           time.Time
+	CurrentDate         time.Time
 	Orders              []OrderInput
 	ExistingAllocations []ExistingAllocation
 	ManualForce         bool
@@ -66,7 +67,7 @@ func Plan(req Request) (Result, error) {
 		return Result{}, ErrInvalidRequest
 	}
 
-	start := truncateDate(req.StartDate)
+	start := scheduleStartDate(req.StartDate, req.CurrentDate)
 	orders := append([]OrderInput(nil), req.Orders...)
 	sort.SliceStable(orders, func(i, j int) bool {
 		if orders[i].Priority != orders[j].Priority {
@@ -226,6 +227,18 @@ func estimateFinishDate(req Request, order OrderInput, start time.Time, remainin
 func truncateDate(value time.Time) time.Time {
 	year, month, day := value.Date()
 	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+func scheduleStartDate(requested, current time.Time) time.Time {
+	start := truncateDate(requested)
+	if current.IsZero() {
+		return start
+	}
+	today := truncateDate(current)
+	if today.Before(start) {
+		return today
+	}
+	return start
 }
 
 func dateKey(value time.Time) string {

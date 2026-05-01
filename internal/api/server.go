@@ -814,6 +814,7 @@ func (s *MemoryStore) AssignUser(req assignUserRequest, actorID string) (domain.
 type scheduleRequest struct {
 	LineID      string              `json:"lineId"`
 	StartDate   string              `json:"startDate"`
+	CurrentDate string              `json:"currentDate"`
 	OrderIDs    []string            `json:"orderIds"`
 	ManualForce bool                `json:"manualForce"`
 	Reason      string              `json:"reason"`
@@ -958,7 +959,8 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 	if err != nil {
 		return calendarResponse{}, errors.New("month must use YYYY-MM")
 	}
-	monthEnd := monthStart.AddDate(0, 1, 0)
+	calendarStart := monthStart.AddDate(0, 0, -int(monthStart.Weekday()))
+	calendarEnd := calendarStart.AddDate(0, 0, 42)
 
 	allocations := []calendarAllocation{}
 	for _, allocation := range s.allocations {
@@ -966,7 +968,7 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 			continue
 		}
 		allocationDate := truncateDate(allocation.Date)
-		if allocationDate.Before(monthStart) || !allocationDate.Before(monthEnd) {
+		if allocationDate.Before(calendarStart) || !allocationDate.Before(calendarEnd) {
 			continue
 		}
 		order := s.orders[allocation.OrderID]
@@ -1142,11 +1144,13 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 	order.Status = domain.StatusCompleted
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
-	s.trimAllocationsForProducedLocked(order.ID, req.ProducedQuantity)
 
 	remainder := *result.Remainder
 	remainder.ID = "ORD-" + strconv.Itoa(s.nextOrderID)
 	s.nextOrderID++
+	if s.splitAllocationsForProducedLocked(order.ID, remainder.ID, req.ProducedQuantity) {
+		remainder.Status = domain.StatusScheduled
+	}
 	s.orders[remainder.ID] = remainder
 	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", created remainder "+remainder.ID)
 	return productionConfirmResponse{Order: order, Remainder: &remainder}, nil
@@ -1177,6 +1181,14 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 			return scheduler.Result{}, errors.New("startDate must use YYYY-MM-DD")
 		}
 		startDate = parsed
+	}
+	currentDate := time.Time{}
+	if req.CurrentDate != "" {
+		parsed, err := time.Parse(dateLayout, req.CurrentDate)
+		if err != nil {
+			return scheduler.Result{}, errors.New("currentDate must use YYYY-MM-DD")
+		}
+		currentDate = parsed
 	}
 
 	selected := map[string]bool{}
@@ -1243,6 +1255,7 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 		LineID:              lineID,
 		CapacityPerDay:      line.CapacityPerDay,
 		StartDate:           startDate,
+		CurrentDate:         currentDate,
 		Orders:              inputs,
 		ExistingAllocations: existingAllocations,
 		ManualForce:         req.ManualForce,
@@ -1371,7 +1384,7 @@ func (s *MemoryStore) lockAllocationsLocked(orderID string) {
 	}
 }
 
-func (s *MemoryStore) trimAllocationsForProducedLocked(orderID string, produced int) {
+func (s *MemoryStore) splitAllocationsForProducedLocked(orderID, remainderID string, produced int) bool {
 	sort.SliceStable(s.allocations, func(i, j int) bool {
 		if s.allocations[i].OrderID == orderID && s.allocations[j].OrderID != orderID {
 			return true
@@ -1385,23 +1398,34 @@ func (s *MemoryStore) trimAllocationsForProducedLocked(orderID string, produced 
 		return s.allocations[i].OrderID < s.allocations[j].OrderID
 	})
 	remainingProduced := produced
+	remainderAllocated := false
 	kept := s.allocations[:0]
 	for _, allocation := range s.allocations {
 		if allocation.OrderID != orderID {
 			kept = append(kept, allocation)
 			continue
 		}
-		if remainingProduced <= 0 {
+		if remainingProduced >= allocation.Quantity {
+			allocation.Locked = true
+			remainingProduced -= allocation.Quantity
+			kept = append(kept, allocation)
 			continue
 		}
-		if allocation.Quantity > remainingProduced {
-			allocation.Quantity = remainingProduced
+		if remainingProduced > 0 {
+			producedAllocation := allocation
+			producedAllocation.Quantity = remainingProduced
+			producedAllocation.Locked = true
+			kept = append(kept, producedAllocation)
+			allocation.Quantity -= remainingProduced
+			remainingProduced = 0
 		}
-		remainingProduced -= allocation.Quantity
-		allocation.Locked = true
+		allocation.OrderID = remainderID
+		allocation.Locked = allocation.Priority == domain.PriorityHigh
 		kept = append(kept, allocation)
+		remainderAllocated = true
 	}
 	s.allocations = kept
+	return remainderAllocated
 }
 
 func validateOrderRequest(req createOrderRequest, lines map[string]domain.ProductionLine) (time.Time, error) {
@@ -1444,7 +1468,7 @@ func normalizedPreviewRequest(req scheduleRequest) scheduleRequest {
 }
 
 func sameScheduleRequest(a, b scheduleRequest) bool {
-	if a.LineID != b.LineID || a.StartDate != b.StartDate || a.ManualForce != b.ManualForce || a.Reason != b.Reason {
+	if a.LineID != b.LineID || a.StartDate != b.StartDate || a.CurrentDate != b.CurrentDate || a.ManualForce != b.ManualForce || a.Reason != b.Reason {
 		return false
 	}
 	if len(a.OrderIDs) != len(b.OrderIDs) {

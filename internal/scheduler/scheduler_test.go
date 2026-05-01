@@ -70,6 +70,41 @@ func TestPlanUsesEarliestAvailableDatesBeforeDueDate(t *testing.T) {
 	}
 }
 
+func TestPlanUsesCurrentDateWhenRequestedStartIsFuture(t *testing.T) {
+	result, err := Plan(Request{
+		LineID:         "A",
+		CapacityPerDay: 10000,
+		StartDate:      mustDate(t, "2026-05-01"),
+		CurrentDate:    mustDate(t, "2026-04-30"),
+		ExistingAllocations: []ExistingAllocation{{
+			OrderID:  "EXISTING-APR30",
+			LineID:   "A",
+			Date:     mustDate(t, "2026-04-30"),
+			Quantity: 7710,
+			Priority: domain.PriorityLow,
+		}},
+		Orders: []OrderInput{{
+			ID:       "ORD-9",
+			LineID:   "A",
+			Quantity: 2500,
+			Priority: domain.PriorityLow,
+			DueDate:  mustDate(t, "2026-05-01"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(result.Allocations) != 2 {
+		t.Fatalf("expected split allocations, got %+v", result.Allocations)
+	}
+	if !result.Allocations[0].Date.Equal(mustDate(t, "2026-04-30")) || result.Allocations[0].Quantity != 2290 {
+		t.Fatalf("expected 2290 on 2026-04-30, got %+v", result.Allocations[0])
+	}
+	if !result.Allocations[1].Date.Equal(mustDate(t, "2026-05-01")) || result.Allocations[1].Quantity != 210 {
+		t.Fatalf("expected 210 on 2026-05-01, got %+v", result.Allocations[1])
+	}
+}
+
 func TestPlanDoesNotMoveExistingHighPriorityAllocations(t *testing.T) {
 	result, err := Plan(Request{
 		LineID:         "A",

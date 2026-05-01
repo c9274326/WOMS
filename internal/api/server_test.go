@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c9274326/woms/internal/domain"
 )
@@ -195,6 +196,35 @@ func TestScheduleJobPersistsAllocationsAndCalendar(t *testing.T) {
 	}
 }
 
+func TestScheduleCalendarIncludesVisibleAdjacentMonthDays(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-04", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []struct {
+			OrderID string `json:"orderId"`
+		} `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode calendar response: %v", err)
+	}
+	if len(payload.Allocations) != 1 || payload.Allocations[0].OrderID != "ORD-1" {
+		t.Fatalf("expected May 1 allocation on April calendar page, got %+v", payload.Allocations)
+	}
+}
+
 func TestScheduleCalendarExcludesOtherMonths(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
@@ -219,6 +249,58 @@ func TestScheduleCalendarExcludesOtherMonths(t *testing.T) {
 	}
 	if len(payload.Allocations) != 0 {
 		t.Fatalf("expected no allocations in other month, got %+v", payload.Allocations)
+	}
+}
+
+func TestSchedulePreviewUsesCurrentDateForFutureStart(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-01"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create order failed: %d %s", res.Code, res.Body.String())
+	}
+
+	store.mu.Lock()
+	store.allocations = append(store.allocations, domain.ScheduleAllocation{
+		OrderID:  "EXISTING-APR30",
+		LineID:   "A",
+		Date:     mustAPIDate(t, "2026-04-30"),
+		Quantity: 7710,
+		Priority: domain.PriorityLow,
+	})
+	store.mu.Unlock()
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["ORD-1"]}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []struct {
+			Date     time.Time `json:"date"`
+			Quantity int       `json:"quantity"`
+		} `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if len(payload.Allocations) != 2 {
+		t.Fatalf("expected split allocations, got %+v", payload.Allocations)
+	}
+	if payload.Allocations[0].Date.Format(dateLayout) != "2026-04-30" || payload.Allocations[0].Quantity != 2290 {
+		t.Fatalf("expected 2290 on 2026-04-30, got %+v", payload.Allocations[0])
+	}
+	if payload.Allocations[1].Date.Format(dateLayout) != "2026-05-01" || payload.Allocations[1].Quantity != 210 {
+		t.Fatalf("expected 210 on 2026-05-01, got %+v", payload.Allocations[1])
 	}
 }
 
@@ -465,16 +547,36 @@ func TestStartProductionLocksScheduledAllocations(t *testing.T) {
 	}
 }
 
-func TestPartialProductionCreatesPendingRemainderAndTrimsAllocation(t *testing.T) {
+func TestPartialProductionKeepsRemainderScheduledOnExistingAllocation(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer("secret", store)
 	salesToken := login(t, server, "sales", "demo")
 	createOrder(t, server, salesToken, "A")
 	schedulerA := login(t, server, "scheduler-a", "demo")
 	createScheduleJob(t, server, schedulerA, "A")
+
+	store.mu.Lock()
+	store.allocations = []domain.ScheduleAllocation{
+		{
+			OrderID:  "ORD-1",
+			LineID:   "A",
+			Date:     mustAPIDate(t, "2026-05-01"),
+			Quantity: 900,
+			Priority: domain.PriorityLow,
+		},
+		{
+			OrderID:  "ORD-1",
+			LineID:   "A",
+			Date:     mustAPIDate(t, "2026-05-02"),
+			Quantity: 1600,
+			Priority: domain.PriorityLow,
+		},
+	}
+	store.mu.Unlock()
+
 	startProduction(t, server, schedulerA, "ORD-1")
 
-	body := bytes.NewBufferString(`{"orderId":"ORD-1","producedQuantity":1500}`)
+	body := bytes.NewBufferString(`{"orderId":"ORD-1","producedQuantity":900}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/production/confirm", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res := httptest.NewRecorder()
@@ -486,14 +588,20 @@ func TestPartialProductionCreatesPendingRemainderAndTrimsAllocation(t *testing.T
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode production response: %v", err)
 	}
-	if payload.Order.Status != domain.StatusCompleted || payload.Order.Quantity != 1500 {
+	if payload.Order.Status != domain.StatusCompleted || payload.Order.Quantity != 900 {
 		t.Fatalf("expected completed original order with produced quantity, got %+v", payload.Order)
 	}
-	if payload.Remainder == nil || payload.Remainder.Quantity != 1000 || payload.Remainder.Status != domain.StatusPending || payload.Remainder.SourceOrder != "ORD-1" {
+	if payload.Remainder == nil || payload.Remainder.Quantity != 1600 || payload.Remainder.Status != domain.StatusScheduled || payload.Remainder.SourceOrder != "ORD-1" {
 		t.Fatalf("unexpected remainder: %+v", payload.Remainder)
 	}
-	if len(store.allocations) != 1 || store.allocations[0].Quantity != 1500 || !store.allocations[0].Locked {
-		t.Fatalf("expected trimmed locked allocation, got %+v", store.allocations)
+	if len(store.allocations) != 2 {
+		t.Fatalf("expected produced and remainder allocations, got %+v", store.allocations)
+	}
+	if store.allocations[0].OrderID != "ORD-1" || store.allocations[0].Quantity != 900 || !store.allocations[0].Locked {
+		t.Fatalf("expected locked produced allocation, got %+v", store.allocations)
+	}
+	if store.allocations[1].OrderID != payload.Remainder.ID || store.allocations[1].Quantity != 1600 || store.allocations[1].Locked {
+		t.Fatalf("expected scheduled remainder allocation transferred to child order, got %+v", store.allocations)
 	}
 }
 
@@ -733,6 +841,15 @@ func createSchedulePreview(t *testing.T, server *Server, token, lineID string) s
 		t.Fatalf("decode preview response: %v", err)
 	}
 	return payload.PreviewID
+}
+
+func mustAPIDate(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(dateLayout, value)
+	if err != nil {
+		t.Fatalf("parse date: %v", err)
+	}
+	return parsed
 }
 
 func contains(values []string, expected string) bool {
