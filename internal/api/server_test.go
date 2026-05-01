@@ -547,7 +547,7 @@ func TestStartProductionLocksScheduledAllocations(t *testing.T) {
 	}
 }
 
-func TestPartialProductionKeepsRemainderScheduledOnExistingAllocation(t *testing.T) {
+func TestPartialProductionReturnsRemainderToPendingQueue(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer("secret", store)
 	salesToken := login(t, server, "sales", "demo")
@@ -588,20 +588,14 @@ func TestPartialProductionKeepsRemainderScheduledOnExistingAllocation(t *testing
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode production response: %v", err)
 	}
-	if payload.Order.Status != domain.StatusCompleted || payload.Order.Quantity != 900 {
-		t.Fatalf("expected completed original order with produced quantity, got %+v", payload.Order)
+	if payload.Order.ID != "ORD-1" || payload.Order.Status != domain.StatusPending || payload.Order.Quantity != 1600 {
+		t.Fatalf("expected original order to return pending with remaining quantity, got %+v", payload.Order)
 	}
-	if payload.Remainder == nil || payload.Remainder.Quantity != 1600 || payload.Remainder.Status != domain.StatusScheduled || payload.Remainder.SourceOrder != "ORD-1" {
+	if payload.Remainder == nil || payload.Remainder.ID != "ORD-1" || payload.Remainder.Quantity != 1600 || payload.Remainder.Status != domain.StatusPending {
 		t.Fatalf("unexpected remainder: %+v", payload.Remainder)
 	}
-	if len(store.allocations) != 2 {
-		t.Fatalf("expected produced and remainder allocations, got %+v", store.allocations)
-	}
-	if store.allocations[0].OrderID != "ORD-1" || store.allocations[0].Quantity != 900 || !store.allocations[0].Locked {
-		t.Fatalf("expected locked produced allocation, got %+v", store.allocations)
-	}
-	if store.allocations[1].OrderID != payload.Remainder.ID || store.allocations[1].Quantity != 1600 || store.allocations[1].Locked {
-		t.Fatalf("expected scheduled remainder allocation transferred to child order, got %+v", store.allocations)
+	if len(store.allocations) != 0 {
+		t.Fatalf("expected partial production to clear scheduled allocations for pending remainder, got %+v", store.allocations)
 	}
 }
 

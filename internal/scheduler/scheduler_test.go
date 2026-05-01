@@ -137,7 +137,7 @@ func TestPlanDoesNotMoveExistingHighPriorityAllocations(t *testing.T) {
 	}
 }
 
-func TestHighPriorityOrderReportsLowPriorityDisplacement(t *testing.T) {
+func TestHighPriorityPendingOrderUsesRemainingCapacityWithoutDisplacement(t *testing.T) {
 	result, err := Plan(Request{
 		LineID:         "A",
 		CapacityPerDay: 10000,
@@ -146,13 +146,13 @@ func TestHighPriorityOrderReportsLowPriorityDisplacement(t *testing.T) {
 			OrderID:  "LOW-1",
 			LineID:   "A",
 			Date:     mustDate(t, "2026-05-01"),
-			Quantity: 9000,
+			Quantity: 2300,
 			Priority: domain.PriorityLow,
 		}},
 		Orders: []OrderInput{{
 			ID:       "HIGH-1",
 			LineID:   "A",
-			Quantity: 5000,
+			Quantity: 2500,
 			Priority: domain.PriorityHigh,
 			DueDate:  mustDate(t, "2026-05-01"),
 		}},
@@ -163,8 +163,8 @@ func TestHighPriorityOrderReportsLowPriorityDisplacement(t *testing.T) {
 	if len(result.Allocations) != 1 || result.Allocations[0].Date != mustDate(t, "2026-05-01") {
 		t.Fatalf("expected high-priority allocation on first day, got %+v", result.Allocations)
 	}
-	if len(result.Conflicts) == 0 || len(result.Conflicts[0].AffectedOrderIDs) != 1 || result.Conflicts[0].AffectedOrderIDs[0] != "LOW-1" {
-		t.Fatalf("expected affected low-priority order conflict, got %+v", result.Conflicts)
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("expected no low-priority displacement conflict, got %+v", result.Conflicts)
 	}
 }
 
