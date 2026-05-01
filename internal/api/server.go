@@ -812,14 +812,16 @@ func (s *MemoryStore) AssignUser(req assignUserRequest, actorID string) (domain.
 }
 
 type scheduleRequest struct {
-	LineID      string              `json:"lineId"`
-	StartDate   string              `json:"startDate"`
-	CurrentDate string              `json:"currentDate"`
-	OrderIDs    []string            `json:"orderIds"`
-	ManualForce bool                `json:"manualForce"`
-	Reason      string              `json:"reason"`
-	PreviewID   string              `json:"previewId"`
-	DraftOrder  *createOrderRequest `json:"draftOrder,omitempty"`
+	LineID              string              `json:"lineId"`
+	StartDate           string              `json:"startDate"`
+	CurrentDate         string              `json:"currentDate"`
+	OrderIDs            []string            `json:"orderIds"`
+	ResolutionOrderIDs  []string            `json:"resolutionOrderIds,omitempty"`
+	ManualForce         bool                `json:"manualForce"`
+	AllowLateCompletion bool                `json:"allowLateCompletion"`
+	Reason              string              `json:"reason"`
+	PreviewID           string              `json:"previewId"`
+	DraftOrder          *createOrderRequest `json:"draftOrder,omitempty"`
 }
 
 func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error) {
@@ -1235,10 +1237,14 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 	}
 	if req.DraftOrder == nil {
 		for _, order := range s.orders {
-			if order.LineID != lineID || order.Status != domain.StatusPending {
+			if order.LineID != lineID {
 				continue
 			}
-			if len(selected) > 0 && !selected[order.ID] {
+			if order.Status == domain.StatusPending {
+				if len(selected) > 0 && !selected[order.ID] {
+					continue
+				}
+			} else if !slicesContains(req.ResolutionOrderIDs, order.ID) {
 				continue
 			}
 			inputs = append(inputs, scheduler.OrderInput{
@@ -1250,8 +1256,31 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 			})
 		}
 	}
+	resolutionOrderIDs := map[string]bool{}
+	for _, orderID := range req.ResolutionOrderIDs {
+		if orderID == "" {
+			continue
+		}
+		if req.DraftOrder != nil {
+			return scheduler.Result{}, errors.New("draft previews cannot include resolution orders")
+		}
+		order, ok := s.orders[orderID]
+		if !ok {
+			return scheduler.Result{}, errors.New("resolution order not found")
+		}
+		if order.LineID != lineID {
+			return scheduler.Result{}, errors.New("resolution order line must match preview line")
+		}
+		if !s.canMoveScheduledOrderLocked(orderID) {
+			return scheduler.Result{}, errors.New("resolution orders must be low-priority scheduled orders without locked or completed allocations")
+		}
+		resolutionOrderIDs[orderID] = true
+	}
 	existingAllocations := []scheduler.ExistingAllocation{}
 	for _, allocation := range s.allocations {
+		if resolutionOrderIDs[allocation.OrderID] {
+			continue
+		}
 		existingAllocations = append(existingAllocations, scheduler.ExistingAllocation{
 			OrderID:  allocation.OrderID,
 			LineID:   allocation.LineID,
@@ -1271,6 +1300,7 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 		ExistingAllocations: existingAllocations,
 		ManualForce:         req.ManualForce,
 		ForceReason:         req.Reason,
+		AllowLateCompletion: req.AllowLateCompletion,
 	})
 }
 
@@ -1287,6 +1317,11 @@ func canPersistConflicts(req scheduleRequest, conflicts []scheduler.Conflict) bo
 }
 
 func (s *MemoryStore) persistAllocationsLocked(allocations []scheduler.Allocation) {
+	replacedOrderIDs := map[string]bool{}
+	for _, allocation := range allocations {
+		replacedOrderIDs[allocation.OrderID] = true
+	}
+	s.removeOpenAllocationsForOrdersLocked(replacedOrderIDs)
 	for _, allocation := range allocations {
 		s.allocations = append(s.allocations, domain.ScheduleAllocation{
 			OrderID:  allocation.OrderID,
@@ -1377,6 +1412,47 @@ func (s *MemoryStore) removeAllocationsLocked(orderID string) {
 		}
 	}
 	s.allocations = kept
+}
+
+func (s *MemoryStore) removeOpenAllocationsForOrdersLocked(orderIDs map[string]bool) {
+	if len(orderIDs) == 0 {
+		return
+	}
+	kept := s.allocations[:0]
+	for _, allocation := range s.allocations {
+		if orderIDs[allocation.OrderID] && allocation.Status != domain.StatusCompleted {
+			continue
+		}
+		kept = append(kept, allocation)
+	}
+	s.allocations = kept
+}
+
+func (s *MemoryStore) canMoveScheduledOrderLocked(orderID string) bool {
+	order, ok := s.orders[orderID]
+	if !ok || order.Status != domain.StatusScheduled || order.Priority != domain.PriorityLow {
+		return false
+	}
+	hasOpenAllocation := false
+	for _, allocation := range s.allocations {
+		if allocation.OrderID != orderID {
+			continue
+		}
+		if allocation.Locked || allocation.Status == domain.StatusInProgress || allocation.Status == domain.StatusCompleted {
+			return false
+		}
+		hasOpenAllocation = true
+	}
+	return hasOpenAllocation
+}
+
+func slicesContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MemoryStore) productionAllocationLocked(orderID string, productionDate time.Time) (domain.ScheduleAllocation, bool) {
@@ -1488,12 +1564,14 @@ func normalizedPreviewRequest(req scheduleRequest) scheduleRequest {
 	normalized.PreviewID = ""
 	normalized.DraftOrder = nil
 	normalized.OrderIDs = append([]string(nil), req.OrderIDs...)
+	normalized.ResolutionOrderIDs = append([]string(nil), req.ResolutionOrderIDs...)
 	sort.Strings(normalized.OrderIDs)
+	sort.Strings(normalized.ResolutionOrderIDs)
 	return normalized
 }
 
 func sameScheduleRequest(a, b scheduleRequest) bool {
-	if a.LineID != b.LineID || a.StartDate != b.StartDate || a.CurrentDate != b.CurrentDate || a.ManualForce != b.ManualForce || a.Reason != b.Reason {
+	if a.LineID != b.LineID || a.StartDate != b.StartDate || a.CurrentDate != b.CurrentDate || a.ManualForce != b.ManualForce || a.AllowLateCompletion != b.AllowLateCompletion || a.Reason != b.Reason {
 		return false
 	}
 	if len(a.OrderIDs) != len(b.OrderIDs) {
@@ -1501,6 +1579,14 @@ func sameScheduleRequest(a, b scheduleRequest) bool {
 	}
 	for index := range a.OrderIDs {
 		if a.OrderIDs[index] != b.OrderIDs[index] {
+			return false
+		}
+	}
+	if len(a.ResolutionOrderIDs) != len(b.ResolutionOrderIDs) {
+		return false
+	}
+	for index := range a.ResolutionOrderIDs {
+		if a.ResolutionOrderIDs[index] != b.ResolutionOrderIDs[index] {
 			return false
 		}
 	}

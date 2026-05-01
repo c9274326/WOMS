@@ -317,6 +317,22 @@ document.getElementById("preview-page-list").addEventListener("click", async (ev
       openRejectDialog(state.preview.request.orderIds);
       return;
     }
+    if (action === "preview-conflict-solution") {
+      const orderIds = checkedValues("[data-conflict-solution-order]");
+      const resolutionOrderIds = checkedValues("[data-conflict-resolution-order]");
+      if (orderIds.length === 0) {
+        showMessage("請選取衝突訂單", "至少選取一張衝突訂單才能產生最早完成解法。", "warn");
+        return;
+      }
+      await retryPreview({
+        orderIds,
+        resolutionOrderIds,
+        allowLateCompletion: true,
+        manualForce: false,
+        reason: "",
+      });
+      return;
+    }
     if (action === "retry-manual-force") {
       const conflicts = state.preview.conflicts ?? [];
       if (!conflictsCanBeManuallyForced(conflicts)) {
@@ -442,7 +458,9 @@ async function createPreview(requestData, kind) {
       startDate: payloadData.startDate,
       currentDate: payloadData.currentDate,
       orderIds: payloadData.orderIds ?? [],
+      resolutionOrderIds: payloadData.resolutionOrderIds ?? [],
       manualForce: payloadData.manualForce === "on" || payloadData.manualForce === true,
+      allowLateCompletion: payloadData.allowLateCompletion === "on" || payloadData.allowLateCompletion === true,
       reason: payloadData.reason ?? "",
     },
   };
@@ -807,6 +825,7 @@ function renderPreviewPage() {
   pageList.innerHTML = [
     ...conflicts.map((conflict, index) => renderConflictItem(conflict, index, manualForce)),
     renderConflictActions(conflicts, manualForce),
+    renderSolutionNotice(allocations),
     ...allocations.map((allocation) => `
       <div class="preview-item ${priorityClass(allocation.priority)}">
         <strong>${escapeHtml(allocation.orderId)}</strong>
@@ -861,7 +880,7 @@ function renderConflictItem(conflict, index = 0, withAcknowledgement = false) {
     <div class="preview-item high">
       <strong>${escapeHtml(conflict.orderId)}</strong>
       <span>${escapeHtml(conflictExplanation(conflict))}</span>
-      <span>最早完成：${finishDate}。至少需延後交期至 ${finishDate} 或取消選取。</span>
+      <span>最早完成：${finishDate}。可在下方選取衝突訂單與可移動訂單，產生最早完成解法。</span>
       <span>${escapeHtml(affected)}</span>
       <button class="secondary-button" data-preview-action="unselect-conflict-order" data-order-id="${escapeHtml(conflict.orderId)}" type="button">取消選取 ${escapeHtml(conflict.orderId)}</button>
       ${acknowledgement}
@@ -877,7 +896,8 @@ function renderConflictActions(conflicts, manualForce) {
   return `
     <div class="conflict-actions">
       <h3>衝突修改</h3>
-      <p class="conflict-note">必須選擇延後交期重試、取消選取，或駁回此次選取；不選擇就不能接受排程。</p>
+      <p class="conflict-note">可以選取衝突訂單與可移動的既有排程，先預覽最早完成解法；確認接受後才會更新正式日曆。</p>
+      ${renderConflictSolutionPicker(conflicts)}
       <label>
         <span>調整開始日期</span>
         <input id="conflict-start-date" type="date" value="${escapeHtml(startDate)}">
@@ -888,6 +908,73 @@ function renderConflictActions(conflicts, manualForce) {
       <button class="secondary-button" data-preview-action="return-workstation" type="button">回工作站調整訂單</button>
     </div>
   `;
+}
+
+function renderConflictSolutionPicker(conflicts) {
+  const conflictOrderIds = Array.from(new Set(conflicts.map((conflict) => conflict.orderId))).sort();
+  const affectedOrderIds = Array.from(new Set(conflicts.flatMap((conflict) => conflict.affectedOrderIds ?? []))).sort();
+  const movableAffected = affectedOrderIds.filter(canMoveOrder);
+  const blockedAffected = affectedOrderIds.filter((orderId) => !canMoveOrder(orderId));
+  return `
+    <div class="solution-picker">
+      <h4>最早完成解法</h4>
+      <div class="solution-choice-list">
+        ${conflictOrderIds.map((orderId) => `
+          <label class="check-option">
+            <input type="checkbox" data-conflict-solution-order value="${escapeHtml(orderId)}" checked>
+            <span>排入 ${escapeHtml(orderId)}</span>
+          </label>
+        `).join("")}
+        ${movableAffected.map((orderId) => `
+          <label class="check-option">
+            <input type="checkbox" data-conflict-resolution-order value="${escapeHtml(orderId)}" checked>
+            <span>允許移動 ${escapeHtml(orderId)}</span>
+          </label>
+        `).join("")}
+        ${blockedAffected.map((orderId) => `
+          <label class="check-option muted-option">
+            <input type="checkbox" disabled>
+            <span>${escapeHtml(orderId)} 已鎖定或不可移動</span>
+          </label>
+        `).join("")}
+      </div>
+      <button data-preview-action="preview-conflict-solution" type="button">預覽最早完成解法</button>
+    </div>
+  `;
+}
+
+function renderSolutionNotice(allocations) {
+  if (!state.preview?.request?.allowLateCompletion) {
+    return "";
+  }
+  const lateAllocations = allocations.filter((allocation) => {
+    const order = state.orders.find((item) => item.id === allocation.orderId);
+    return order && dateOnly(allocation.date) > dateOnly(order.dueDate);
+  });
+  if (lateAllocations.length === 0) {
+    return `
+      <div class="preview-item solution-notice">
+        <strong>最早完成解法</strong>
+        <span>此解法可在交期內完成所有已選訂單與可移動訂單。</span>
+      </div>
+    `;
+  }
+  const lateOrderIds = Array.from(new Set(lateAllocations.map((allocation) => allocation.orderId))).sort();
+  return `
+    <div class="preview-item solution-notice high">
+      <strong>最早完成解法</strong>
+      <span>${escapeHtml(lateOrderIds.join(", "))} 會晚於原交期完成；接受後會依下方預覽更新正式日曆。</span>
+    </div>
+  `;
+}
+
+function canMoveOrder(orderId) {
+  const order = state.orders.find((item) => item.id === orderId);
+  if (!order || order.status !== statuses[1] || order.priority !== "low") {
+    return false;
+  }
+  const allocations = state.calendarAllocations.filter((allocation) => allocation.orderId === orderId);
+  return allocations.length > 0 && allocations.every((allocation) => !allocation.locked && allocation.status === statuses[1]);
 }
 
 function renderWaterline(allocations) {
@@ -1166,6 +1253,12 @@ function cssEscape(value) {
   return String(value).replaceAll('"', '\\"');
 }
 
+function checkedValues(selector) {
+  return Array.from(document.querySelectorAll(selector))
+    .filter((node) => node.checked)
+    .map((node) => node.value);
+}
+
 function updateSelectedCount() {
   document.getElementById("selected-count").textContent = `已選取 ${state.selectedOrderIds.size} 張訂單`;
 }
@@ -1255,7 +1348,9 @@ function scheduleFormData() {
   data.currentDate = dateInputValue(new Date());
   data.startDate = data.currentDate;
   data.manualForce = data.manualForce === "on";
+  data.allowLateCompletion = false;
   data.orderIds = Array.from(state.selectedOrderIds);
+  data.resolutionOrderIds = [];
   return data;
 }
 

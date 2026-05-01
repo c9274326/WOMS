@@ -807,6 +807,29 @@ button.calendar-item:focus-visible {
   padding-top: 10px;
 }
 
+.solution-picker {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dce5e7;
+  border-radius: var(--radius);
+  padding: 10px;
+  background: #ffffff;
+}
+
+.solution-choice-list {
+  display: grid;
+  gap: 6px;
+}
+
+.muted-option {
+  color: var(--muted);
+}
+
+.solution-notice {
+  border: 1px solid #9ae6b4;
+  background: #ecfdf3;
+}
+
 .conflict-note {
   margin: 0;
   color: var(--danger);
@@ -848,7 +871,7 @@ button.calendar-item:focus-visible {
 }
 
 .preview-dialog {
-  width: min(1180px, calc(100vw - 40px));
+  width: min(1360px, calc(100vw - 40px));
   max-height: calc(100vh - 40px);
   border: 0;
   border-radius: 10px;
@@ -874,7 +897,7 @@ button.calendar-item:focus-visible {
 
 .preview-page-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.46fr);
   gap: 16px;
 }
 
@@ -891,6 +914,10 @@ button.calendar-item:focus-visible {
   min-width: 720px;
   max-height: 68vh;
   overflow: auto;
+}
+
+.preview-page-grid > aside .preview-list {
+  max-height: 68vh;
 }
 
 .message-dialog {

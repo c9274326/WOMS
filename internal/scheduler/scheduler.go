@@ -54,6 +54,7 @@ type Request struct {
 	ExistingAllocations []ExistingAllocation
 	ManualForce         bool
 	ForceReason         string
+	AllowLateCompletion bool
 }
 
 type Result struct {
@@ -120,13 +121,19 @@ func Plan(req Request) (Result, error) {
 		for remaining > 0 {
 			key := dateKey(day)
 			if day.After(due) {
-				finish := estimateFinishDate(req, order, day, remaining, highUsed, lowUsed, newUsed)
-				result.Conflicts = append(result.Conflicts, Conflict{
-					OrderID:            order.ID,
-					Reason:             "capacity cannot satisfy order before due date",
-					EarliestFinishDate: finish,
-				})
-				break
+				if req.AllowLateCompletion {
+					// Conflict solutions intentionally show the earliest completion plan,
+					// even when that plan finishes after the customer due date.
+				} else {
+					finish := estimateFinishDate(req, order, day, remaining, highUsed, lowUsed, newUsed)
+					result.Conflicts = append(result.Conflicts, Conflict{
+						OrderID:            order.ID,
+						Reason:             "capacity cannot satisfy order before due date",
+						EarliestFinishDate: finish,
+						AffectedOrderIDs:   affectedOrdersBetween(start, due, lowByDate),
+					})
+					break
+				}
 			}
 
 			used := highUsed[key] + newUsed[key]
@@ -235,10 +242,18 @@ func scheduleStartDate(requested, current time.Time) time.Time {
 		return start
 	}
 	today := truncateDate(current)
-	if today.Before(start) {
+	if start.Before(today) {
 		return today
 	}
 	return start
+}
+
+func affectedOrdersBetween(start, due time.Time, byDate map[string][]string) []string {
+	affected := []string{}
+	for day := truncateDate(start); !day.After(due); day = day.AddDate(0, 0, 1) {
+		affected = appendUniqueMany(affected, byDate[dateKey(day)])
+	}
+	return affected
 }
 
 func dateKey(value time.Time) string {

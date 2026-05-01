@@ -70,38 +70,35 @@ func TestPlanUsesEarliestAvailableDatesBeforeDueDate(t *testing.T) {
 	}
 }
 
-func TestPlanUsesCurrentDateWhenRequestedStartIsFuture(t *testing.T) {
+func TestPlanRespectsFutureRequestedStartWhenCurrentDateIsEarlier(t *testing.T) {
 	result, err := Plan(Request{
 		LineID:         "A",
 		CapacityPerDay: 10000,
-		StartDate:      mustDate(t, "2026-05-01"),
-		CurrentDate:    mustDate(t, "2026-04-30"),
+		StartDate:      mustDate(t, "2026-05-13"),
+		CurrentDate:    mustDate(t, "2026-05-01"),
 		ExistingAllocations: []ExistingAllocation{{
-			OrderID:  "EXISTING-APR30",
+			OrderID:  "EXISTING-MAY01",
 			LineID:   "A",
-			Date:     mustDate(t, "2026-04-30"),
-			Quantity: 7710,
+			Date:     mustDate(t, "2026-05-01"),
+			Quantity: 10000,
 			Priority: domain.PriorityLow,
 		}},
 		Orders: []OrderInput{{
-			ID:       "ORD-9",
+			ID:       "ORD-6",
 			LineID:   "A",
 			Quantity: 2500,
 			Priority: domain.PriorityLow,
-			DueDate:  mustDate(t, "2026-05-01"),
+			DueDate:  mustDate(t, "2026-05-20"),
 		}},
 	})
 	if err != nil {
 		t.Fatalf("Plan returned error: %v", err)
 	}
-	if len(result.Allocations) != 2 {
-		t.Fatalf("expected split allocations, got %+v", result.Allocations)
+	if len(result.Allocations) != 1 {
+		t.Fatalf("expected one allocation, got %+v", result.Allocations)
 	}
-	if !result.Allocations[0].Date.Equal(mustDate(t, "2026-04-30")) || result.Allocations[0].Quantity != 2290 {
-		t.Fatalf("expected 2290 on 2026-04-30, got %+v", result.Allocations[0])
-	}
-	if !result.Allocations[1].Date.Equal(mustDate(t, "2026-05-01")) || result.Allocations[1].Quantity != 210 {
-		t.Fatalf("expected 210 on 2026-05-01, got %+v", result.Allocations[1])
+	if !result.Allocations[0].Date.Equal(mustDate(t, "2026-05-13")) {
+		t.Fatalf("expected requested drop date, got %+v", result.Allocations[0])
 	}
 }
 
@@ -189,6 +186,69 @@ func TestPlanReportsEarliestFinishWhenDueDateCannotBeMet(t *testing.T) {
 	}
 	if !result.Conflicts[0].EarliestFinishDate.Equal(mustDate(t, "2026-05-03")) {
 		t.Fatalf("unexpected earliest finish date: %s", result.Conflicts[0].EarliestFinishDate)
+	}
+}
+
+func TestPlanReportsAffectedMovableAllocationsOnCapacityConflict(t *testing.T) {
+	result, err := Plan(Request{
+		LineID:         "A",
+		CapacityPerDay: 10000,
+		StartDate:      mustDate(t, "2026-05-01"),
+		ExistingAllocations: []ExistingAllocation{{
+			OrderID:  "LOW-1",
+			LineID:   "A",
+			Date:     mustDate(t, "2026-05-01"),
+			Quantity: 10000,
+			Priority: domain.PriorityLow,
+		}},
+		Orders: []OrderInput{{
+			ID:       "ORD-CONFLICT",
+			LineID:   "A",
+			Quantity: 2500,
+			Priority: domain.PriorityLow,
+			DueDate:  mustDate(t, "2026-05-01"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(result.Conflicts) != 1 {
+		t.Fatalf("expected one conflict, got %+v", result.Conflicts)
+	}
+	if len(result.Conflicts[0].AffectedOrderIDs) != 1 || result.Conflicts[0].AffectedOrderIDs[0] != "LOW-1" {
+		t.Fatalf("expected LOW-1 as affected movable order, got %+v", result.Conflicts[0])
+	}
+}
+
+func TestPlanCanPreviewEarliestLateCompletionSolution(t *testing.T) {
+	result, err := Plan(Request{
+		LineID:              "A",
+		CapacityPerDay:      10000,
+		StartDate:           mustDate(t, "2026-05-01"),
+		AllowLateCompletion: true,
+		ExistingAllocations: []ExistingAllocation{{
+			OrderID:  "LOW-1",
+			LineID:   "A",
+			Date:     mustDate(t, "2026-05-01"),
+			Quantity: 10000,
+			Priority: domain.PriorityLow,
+		}},
+		Orders: []OrderInput{{
+			ID:       "ORD-SOLUTION",
+			LineID:   "A",
+			Quantity: 2500,
+			Priority: domain.PriorityLow,
+			DueDate:  mustDate(t, "2026-05-01"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("expected no blocking conflicts for late solution preview, got %+v", result.Conflicts)
+	}
+	if len(result.Allocations) != 1 || !result.Allocations[0].Date.Equal(mustDate(t, "2026-05-02")) {
+		t.Fatalf("expected earliest late allocation on 2026-05-02, got %+v", result.Allocations)
 	}
 }
 
