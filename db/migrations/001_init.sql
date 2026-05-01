@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS schedule_allocations (
     quantity INTEGER NOT NULL CHECK (quantity > 0),
     priority TEXT NOT NULL CHECK (priority IN ('low', 'high')),
     locked BOOLEAN NOT NULL DEFAULT FALSE,
-    status TEXT CHECK (status IN ('敺?蝔?, '撌脫?蝔?, '?銝?, '撌脣???))
+    status TEXT CHECK (status IN ('待排程', '已排程', '生產中', '已完成'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
