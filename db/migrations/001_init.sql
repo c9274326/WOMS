@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS schedule_allocations (
     allocation_date DATE NOT NULL,
     quantity INTEGER NOT NULL CHECK (quantity > 0),
     priority TEXT NOT NULL CHECK (priority IN ('low', 'high')),
-    locked BOOLEAN NOT NULL DEFAULT FALSE
+    locked BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT CHECK (status IN ('待排程', '已排程', '生產中', '已完成'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (

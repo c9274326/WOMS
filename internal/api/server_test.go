@@ -576,7 +576,7 @@ func TestPartialProductionReturnsRemainderToPendingQueue(t *testing.T) {
 
 	startProduction(t, server, schedulerA, "ORD-1")
 
-	body := bytes.NewBufferString(`{"orderId":"ORD-1","producedQuantity":900}`)
+	body := bytes.NewBufferString(`{"orderId":"ORD-1","productionDate":"2026-05-01","producedQuantity":800}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/production/confirm", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res := httptest.NewRecorder()
@@ -588,14 +588,17 @@ func TestPartialProductionReturnsRemainderToPendingQueue(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode production response: %v", err)
 	}
-	if payload.Order.ID != "ORD-1" || payload.Order.Status != domain.StatusPending || payload.Order.Quantity != 1600 {
+	if payload.Order.ID != "ORD-1" || payload.Order.Status != domain.StatusPending || payload.Order.Quantity != 1700 {
 		t.Fatalf("expected original order to return pending with remaining quantity, got %+v", payload.Order)
 	}
-	if payload.Remainder == nil || payload.Remainder.ID != "ORD-1" || payload.Remainder.Quantity != 1600 || payload.Remainder.Status != domain.StatusPending {
+	if payload.Remainder == nil || payload.Remainder.ID != "ORD-1" || payload.Remainder.Quantity != 1700 || payload.Remainder.Status != domain.StatusPending {
 		t.Fatalf("unexpected remainder: %+v", payload.Remainder)
 	}
-	if len(store.allocations) != 0 {
-		t.Fatalf("expected partial production to clear scheduled allocations for pending remainder, got %+v", store.allocations)
+	if len(store.allocations) != 1 {
+		t.Fatalf("expected partial production to keep one completed allocation, got %+v", store.allocations)
+	}
+	if store.allocations[0].OrderID != "ORD-1" || store.allocations[0].Quantity != 800 || store.allocations[0].Status != domain.StatusCompleted || !store.allocations[0].Date.Equal(mustAPIDate(t, "2026-05-01")) {
+		t.Fatalf("expected completed May 1 allocation for produced quantity, got %+v", store.allocations[0])
 	}
 }
 
@@ -608,7 +611,7 @@ func TestProductionConfirmRejectsQuantityAboveOrderTotal(t *testing.T) {
 	createScheduleJob(t, server, schedulerA, "A")
 	startProduction(t, server, schedulerA, "ORD-1")
 
-	body := bytes.NewBufferString(`{"orderId":"ORD-1","producedQuantity":2501}`)
+	body := bytes.NewBufferString(`{"orderId":"ORD-1","productionDate":"2026-05-01","producedQuantity":2501}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/production/confirm", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res := httptest.NewRecorder()
@@ -616,7 +619,7 @@ func TestProductionConfirmRejectsQuantityAboveOrderTotal(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected bad request, got %d %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), "producedQuantity cannot exceed order quantity") {
+	if !strings.Contains(res.Body.String(), "producedQuantity cannot exceed scheduled allocation quantity") {
 		t.Fatalf("expected clear quantity error, got %s", res.Body.String())
 	}
 }

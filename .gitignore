@@ -26,6 +26,7 @@ charts/
 
 # Logs and runtime files
 *.log
+npm-debug.log*
 tmp/
 .tmp/
 .tmp-*

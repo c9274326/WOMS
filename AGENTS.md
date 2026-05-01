@@ -23,6 +23,12 @@ WOMS 是晶圓訂單管理與排程系統，必須以最終部署型態開發：
 - 一般報告使用成對檔案，例如 `docs/implementation-plan.zh-TW.md` 與 `docs/implementation-plan.en.md`。
 - 實作或部署行為改變時，README 必須同步更新。
 
+### 編碼與繁中文案規則
+- 所有 source code、SQL migration、Markdown 與前端檔案都使用 UTF-8。不要用系統預設 ANSI/Big5/CP950 重新寫檔。
+- 在 Windows PowerShell 中修改含繁中文案的檔案時，避免用會套用預設編碼的寫檔方式；優先使用 `apply_patch`。若必須用 PowerShell 寫檔，明確指定 UTF-8。
+- 這次 `db/migrations/001_init.sql` 的 `schedule_allocations.status` constraint 出現 `敺?蝔?` 等亂碼，根因是繁中 UTF-8 內容曾被錯誤 code page 讀寫，造成 mojibake。狀態值應維持為 `待排程`、`已排程`、`生產中`、`已完成`、`需業務處理`。
+- 若發現 `敺`、`蝔`、`銝`、`撌`、`�` 等疑似 mojibake 字串，先追查是否為 UTF-8 被 CP950/ANSI 誤解碼，不要把亂碼加入新的 schema、API contract 或文件。
+
 ### 開發原則
 - 採 TDD。排程、權限、狀態轉換、Redis lock、Kafka job flow、KEDA 驗證腳本都要先有測試或明確驗證案例。
 - Go 程式碼必須可 `gofmt`，並通過 `go test ./...`。
@@ -58,6 +64,12 @@ WOMS is a wafer order management and scheduling system. It must be built in the 
 - `AGENTS.md` keeps both languages in the same file as shared team memory.
 - General reports use paired files, for example `docs/implementation-plan.zh-TW.md` and `docs/implementation-plan.en.md`.
 - README must be updated whenever implementation or deployment behavior changes.
+
+### Encoding And zh-TW Copy Rules
+- All source code, SQL migrations, Markdown, and frontend files use UTF-8. Do not rewrite files with the system default ANSI/Big5/CP950 encoding.
+- On Windows PowerShell, avoid write methods that use implicit default encodings when files contain zh-TW copy; prefer `apply_patch`. If PowerShell must write a file, explicitly choose UTF-8.
+- The `schedule_allocations.status` constraint in `db/migrations/001_init.sql` previously showed mojibake such as `敺?蝔?`. The root cause was zh-TW UTF-8 text being read or written through the wrong code page. Status values must remain `待排程`, `已排程`, `生產中`, `已完成`, and `需業務處理`.
+- If strings such as `敺`, `蝔`, `銝`, `撌`, or `�` appear unexpectedly, investigate UTF-8 text decoded as CP950/ANSI before adding the text to schema, API contracts, or documentation.
 
 ### Development Principles
 - Use TDD. Scheduling, authorization, state transitions, Redis locks, Kafka job flow, and KEDA verification scripts need tests or explicit verification scenarios.
