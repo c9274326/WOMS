@@ -1,8 +1,11 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -16,17 +19,56 @@ import (
 )
 
 const dateLayout = "2006-01-02"
+const hpaDemoSource = "hpa-peak-demo"
+const hpaDemoFirstLine = 1
+const hpaDemoLastLine = 200
+const hpaDemoOrdersPerLine = 5
 
 type Server struct {
 	jwtSecret string
-	store     *MemoryStore
+	store     Store
+	publisher ScheduleJobPublisher
 }
 
 func NewServer(jwtSecret string, store *MemoryStore) *Server {
+	return NewServerWithPublisher(jwtSecret, store, NoopScheduleJobPublisher{})
+}
+
+func NewServerWithPublisher(jwtSecret string, store Store, publisher ScheduleJobPublisher) *Server {
 	if store == nil {
 		store = NewMemoryStore()
 	}
-	return &Server{jwtSecret: jwtSecret, store: store}
+	if publisher == nil {
+		publisher = NoopScheduleJobPublisher{}
+	}
+	return &Server{jwtSecret: jwtSecret, store: store, publisher: publisher}
+}
+
+type Store interface {
+	Authenticate(username, password string) (domain.User, bool)
+	ListOrders(claims auth.Claims) []domain.Order
+	CreateOrder(req createOrderRequest, actorID string) (domain.Order, error)
+	DeleteOrders(req deleteOrdersRequest, claims auth.Claims) (deleteOrdersResponse, error)
+	UpdateOrderDueDate(id string, req updateOrderRequest, claims auth.Claims) (domain.Order, error)
+	ConfirmPreviewOrder(previewID string, claims auth.Claims) (domain.Order, error)
+	RejectOrders(req rejectOrdersRequest, claims auth.Claims) (rejectOrdersResponse, error)
+	ResubmitOrder(req resubmitOrderRequest, claims auth.Claims) (domain.Order, error)
+	ListUsers() []domain.User
+	AssignUser(req assignUserRequest, actorID string) (domain.User, error)
+	CreateDemoConflictOrders(req demoConflictRequest, claims auth.Claims) ([]domain.Order, error)
+	PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error)
+	CreateScheduleJob(req scheduleRequest, claims auth.Claims) (domain.ScheduleJob, error)
+	DeleteQueuedScheduleJob(id string)
+	ExecuteScheduleJob(id string) domain.ScheduleJob
+	GetScheduleJob(id string) (domain.ScheduleJob, bool)
+	ScheduleCalendar(lineID, month string, claims auth.Claims) (calendarResponse, error)
+	ScheduleHistory(lineID string, claims auth.Claims) ([]domain.AuditEntry, error)
+	StartProduction(req productionStartRequest, claims auth.Claims) (domain.Order, error)
+	ConfirmProduction(req productionConfirmRequest, claims auth.Claims) (productionConfirmResponse, error)
+	CreateHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, error)
+	ClearHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, error)
+	HPAPeakSummary() hpaPeakSummary
+	HPAPeakJobs() []domain.ScheduleJob
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +101,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleUsers(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/demo/conflict-orders":
 		s.handleDemoConflictOrders(w, r)
+	case r.URL.Path == "/api/demo/hpa-peak":
+		s.handleHPAPeakDemo(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/schedules/preview":
 		s.handleSchedulePreview(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/schedules/calendar":
@@ -301,6 +345,45 @@ func (s *Server) handleSchedulePreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleHPAPeakDemo(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleAdmin {
+		writeError(w, http.StatusForbidden, "只有管理員可以觸發多產線排程尖峰。")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, hpaPeakResponse{Summary: s.store.HPAPeakSummary()})
+	case http.MethodPost:
+		summary, err := s.store.CreateHPAPeakDemo(claims)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		for _, job := range s.store.HPAPeakJobs() {
+			if err := s.publisher.PublishScheduleJob(r.Context(), job); err != nil {
+				_, _ = s.store.ClearHPAPeakDemo(claims)
+				writeError(w, http.StatusBadGateway, "排程任務送出失敗，請稍後再試。")
+				return
+			}
+		}
+		writeJSON(w, http.StatusAccepted, hpaPeakResponse{Summary: summary})
+	case http.MethodDelete:
+		summary, err := s.store.ClearHPAPeakDemo(claims)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, hpaPeakResponse{Summary: summary})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
 func (s *Server) handleScheduleCalendar(w http.ResponseWriter, r *http.Request) {
 	claims, err := s.claimsFromRequest(r)
 	if err != nil {
@@ -355,6 +438,14 @@ func (s *Server) handleScheduleJobs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if err := s.publisher.PublishScheduleJob(r.Context(), job); err != nil {
+		s.store.DeleteQueuedScheduleJob(job.ID)
+		writeError(w, http.StatusBadGateway, "排程任務送出失敗，請稍後再試。")
+		return
+	}
+	if _, ok := s.publisher.(NoopScheduleJobPublisher); ok {
+		job = s.store.ExecuteScheduleJob(job.ID)
 	}
 	writeJSON(w, http.StatusAccepted, job)
 }
@@ -419,9 +510,11 @@ type MemoryStore struct {
 	users         map[string]domain.User
 	orders        map[string]domain.Order
 	jobs          map[string]domain.ScheduleJob
+	jobRequests   map[string]scheduleRequest
 	allocations   []domain.ScheduleAllocation
 	previews      map[string]previewRecord
 	audits        []domain.AuditEntry
+	lineLocks     map[string]bool
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -446,8 +539,10 @@ func NewMemoryStore() *MemoryStore {
 		},
 		orders:      map[string]domain.Order{},
 		jobs:        map[string]domain.ScheduleJob{},
+		jobRequests: map[string]scheduleRequest{},
 		allocations: []domain.ScheduleAllocation{},
 		previews:    map[string]previewRecord{},
+		lineLocks:   map[string]bool{},
 	}
 }
 
@@ -517,12 +612,36 @@ type demoConflictRequest struct {
 	Count   int    `json:"count"`
 }
 
+type hpaPeakSummary struct {
+	LineCount      int                  `json:"lineCount"`
+	OrderCount     int                  `json:"orderCount"`
+	JobCount       int                  `json:"jobCount"`
+	Statuses       map[string]int       `json:"statuses"`
+	Topic          string               `json:"topic"`
+	ConsumerGroup  string               `json:"consumerGroup"`
+	HPAName        string               `json:"hpaName"`
+	DeploymentName string               `json:"deploymentName"`
+	Reason         string               `json:"reason"`
+	WatchCommand   string               `json:"watchCommand"`
+	FailedMessages []string             `json:"failedMessages,omitempty"`
+	RecentJobs     []domain.ScheduleJob `json:"recentJobs,omitempty"`
+}
+
+type hpaPeakResponse struct {
+	Summary hpaPeakSummary `json:"summary"`
+}
+
 type previewRecord struct {
-	ActorID    string
-	ActorRole  domain.Role
-	Request    scheduleRequest
-	DraftOrder *createOrderRequest
-	CreatedAt  time.Time
+	ActorID      string
+	ActorRole    domain.Role
+	LineID       string
+	LineRevision int64
+	Request      scheduleRequest
+	RequestHash  string
+	DraftOrder   *createOrderRequest
+	Allocations  []scheduler.Allocation
+	Conflicts    []scheduler.Conflict
+	CreatedAt    time.Time
 }
 
 type schedulePreviewResponse struct {
@@ -596,6 +715,7 @@ func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, clai
 	}
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
+	s.bumpLineRevisionLocked(order.LineID)
 	s.auditLocked(claims.Subject, "order.update_due_date", order.ID, req.DueDate)
 	return order, nil
 }
@@ -635,6 +755,7 @@ func (s *MemoryStore) createOrderLocked(req createOrderRequest, actorID string) 
 		UpdatedAt: now,
 	}
 	s.orders[id] = order
+	s.bumpLineRevisionLocked(order.LineID)
 	s.auditLocked(actorID, "order.create", id, "")
 	return order, nil
 }
@@ -672,6 +793,7 @@ func (s *MemoryStore) RejectOrders(req rejectOrdersRequest, claims auth.Claims) 
 		order.RejectedAt = now
 		order.UpdatedAt = now
 		s.orders[order.ID] = order
+		s.bumpLineRevisionLocked(order.LineID)
 		s.auditLocked(claims.Subject, "order.reject", order.ID, reason)
 		result.Orders = append(result.Orders, order)
 	}
@@ -714,6 +836,7 @@ func (s *MemoryStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Claims
 	order.RejectedAt = time.Time{}
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
+	s.bumpLineRevisionLocked(order.LineID)
 	s.auditLocked(claims.Subject, "order.resubmit", order.ID, "")
 	return order, nil
 }
@@ -724,6 +847,9 @@ func (s *MemoryStore) ListOrders(claims auth.Claims) []domain.Order {
 
 	orders := make([]domain.Order, 0, len(s.orders))
 	for _, order := range s.orders {
+		if claims.Role == domain.RoleSales && order.CreatedBy != claims.Subject {
+			continue
+		}
 		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
 			continue
 		}
@@ -766,6 +892,7 @@ func (s *MemoryStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims) 
 		}
 		delete(s.orders, id)
 		s.removeAllocationsLocked(id)
+		s.bumpLineRevisionLocked(order.LineID)
 		s.auditLocked(claims.Subject, "order.delete", id, "")
 		result.DeletedOrderIDs = append(result.DeletedOrderIDs, id)
 	}
@@ -831,14 +958,21 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 	if err != nil {
 		return schedulePreviewResponse{}, err
 	}
+	lineID := scheduleLineID(req, claims)
 	id := "PREVIEW-" + strconv.Itoa(s.nextPreviewID)
 	s.nextPreviewID++
+	normalized := normalizedPreviewRequest(req)
 	s.previews[id] = previewRecord{
-		ActorID:    claims.Subject,
-		ActorRole:  claims.Role,
-		Request:    normalizedPreviewRequest(req),
-		DraftOrder: req.DraftOrder,
-		CreatedAt:  time.Now().UTC(),
+		ActorID:      claims.Subject,
+		ActorRole:    claims.Role,
+		LineID:       lineID,
+		LineRevision: s.lines[lineID].ScheduleRevision,
+		Request:      normalized,
+		RequestHash:  requestHash(normalized),
+		DraftOrder:   req.DraftOrder,
+		Allocations:  append([]scheduler.Allocation(nil), result.Allocations...),
+		Conflicts:    append([]scheduler.Conflict(nil), result.Conflicts...),
+		CreatedAt:    time.Now().UTC(),
 	}
 	return schedulePreviewResponse{
 		PreviewID:   id,
@@ -866,6 +1000,13 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 	if !sameScheduleRequest(preview.Request, normalizedPreviewRequest(req)) {
 		return domain.ScheduleJob{}, errors.New("schedule request changed after preview")
 	}
+	line, ok := s.lines[preview.LineID]
+	if !ok {
+		return domain.ScheduleJob{}, errors.New("production line does not exist")
+	}
+	if line.ScheduleRevision != preview.LineRevision {
+		return domain.ScheduleJob{}, errors.New("排程資料已變更，請重新試排。")
+	}
 
 	jobLine := req.LineID
 	if jobLine == "" {
@@ -878,39 +1019,110 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 	now := time.Now().UTC()
 	id := "JOB-" + strconv.Itoa(s.nextJobID)
 	s.nextJobID++
-	job := domain.ScheduleJob{ID: id, LineID: jobLine, Status: domain.JobQueued, CreatedAt: now, UpdatedAt: now}
+	job := domain.ScheduleJob{
+		ID:           id,
+		LineID:       jobLine,
+		Status:       domain.JobQueued,
+		PreviewID:    req.PreviewID,
+		RequestHash:  preview.RequestHash,
+		LineRevision: preview.LineRevision,
+		OrderIDs:     append([]string(nil), req.OrderIDs...),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
 	s.jobs[id] = job
+	s.jobRequests[id] = req
+	s.auditLocked(claims.Subject, "schedule.job.create", id, req.Reason)
+	if req.ManualForce {
+		s.auditLocked(claims.Subject, "schedule.job.manual_force", id, req.Reason)
+	}
+	return job, nil
+}
+
+func (s *MemoryStore) DeleteQueuedScheduleJob(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.jobs[id]
+	if !ok || job.Status != domain.JobQueued {
+		return
+	}
+	delete(s.jobs, id)
+	delete(s.jobRequests, id)
+}
+
+func (s *MemoryStore) ExecuteScheduleJob(id string) domain.ScheduleJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.jobs[id]
+	if !ok {
+		return domain.ScheduleJob{}
+	}
+	if job.Status == domain.JobCancelled || job.Status == domain.JobCompleted || job.Status == domain.JobFailed {
+		return job
+	}
+	req, ok := s.jobRequests[id]
+	if !ok {
+		job.Status = domain.JobFailed
+		job.Message = "找不到排程任務內容。"
+		job.UpdatedAt = time.Now().UTC()
+		s.jobs[id] = job
+		return job
+	}
+
+	if s.lineLocks[job.LineID] {
+		job.Status = domain.JobFailed
+		job.Message = "產線正在排程中，請稍後再試。"
+		job.UpdatedAt = time.Now().UTC()
+		s.jobs[id] = job
+		return job
+	}
+	s.lineLocks[job.LineID] = true
+	defer delete(s.lineLocks, job.LineID)
 
 	job.Status = domain.JobRunning
-	job.UpdatedAt = time.Now().UTC()
+	job.Message = "排程任務執行中。"
+	job.StartedAt = time.Now().UTC()
+	job.UpdatedAt = job.StartedAt
 	s.jobs[id] = job
+	if job.Status == domain.JobCancelled {
+		return job
+	}
+	if current := s.lines[job.LineID].ScheduleRevision; current != job.LineRevision {
+		job.Status = domain.JobFailed
+		job.Message = "排程資料已變更，請重新試排。"
+		job.UpdatedAt = time.Now().UTC()
+		s.jobs[id] = job
+		return job
+	}
+	claims := s.previewClaimsLocked(job.PreviewID, job.LineID)
 	result, err := s.planLocked(req, claims)
 	if err != nil {
 		job.Status = domain.JobFailed
 		job.Message = err.Error()
 		job.UpdatedAt = time.Now().UTC()
 		s.jobs[id] = job
-		return job, nil
+		return job
 	}
 	if len(result.Conflicts) > 0 && !canPersistConflicts(req, result.Conflicts) {
 		job.Status = domain.JobFailed
-		job.Message = "schedule conflicts require review"
+		job.Message = "排程結果仍有衝突，請重新檢查後再送出。"
 		job.UpdatedAt = time.Now().UTC()
 		s.jobs[id] = job
-		return job, nil
+		return job
 	}
 
 	job.Status = domain.JobCompleted
-	job.Message = "schedule job accepted by foundation scheduler"
-	job.UpdatedAt = time.Now().UTC()
+	job.Message = "排程任務已完成。"
+	job.CompletedAt = time.Now().UTC()
+	job.UpdatedAt = job.CompletedAt
 	s.jobs[id] = job
 	s.persistAllocationsLocked(result.Allocations)
+	s.bumpLineRevisionLocked(job.LineID)
 	delete(s.previews, req.PreviewID)
-	s.auditLocked(claims.Subject, "schedule.job.create", id, req.Reason)
-	if req.ManualForce && len(result.Conflicts) > 0 {
-		s.auditLocked(claims.Subject, "schedule.job.manual_force", id, req.Reason)
-	}
-	return job, nil
+	delete(s.jobRequests, id)
+	return job
 }
 
 func (s *MemoryStore) GetScheduleJob(id string) (domain.ScheduleJob, bool) {
@@ -918,6 +1130,14 @@ func (s *MemoryStore) GetScheduleJob(id string) (domain.ScheduleJob, bool) {
 	defer s.mu.Unlock()
 	job, ok := s.jobs[id]
 	return job, ok
+}
+
+func (s *MemoryStore) previewClaimsLocked(previewID, lineID string) auth.Claims {
+	preview, ok := s.previews[previewID]
+	if !ok {
+		return auth.Claims{Role: domain.RoleScheduler, LineID: lineID}
+	}
+	return auth.Claims{Subject: preview.ActorID, Role: preview.ActorRole, LineID: lineID}
 }
 
 type calendarAllocation struct {
@@ -1111,6 +1331,7 @@ func (s *MemoryStore) StartProduction(req productionStartRequest, claims auth.Cl
 	order.UpdatedAt = time.Now().UTC()
 	s.orders[order.ID] = order
 	s.lockAllocationsLocked(order.ID)
+	s.bumpLineRevisionLocked(order.LineID)
 	s.auditLocked(claims.Subject, "production.start", order.ID, "")
 	return order, nil
 }
@@ -1154,6 +1375,7 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 		order.UpdatedAt = time.Now().UTC()
 		s.orders[order.ID] = order
 		s.completeProductionAllocationLocked(order.ID, productionDate, req.ProducedQuantity)
+		s.bumpLineRevisionLocked(order.LineID)
 		s.auditLocked(claims.Subject, "production.confirm.complete", order.ID, "")
 		return productionConfirmResponse{Order: order}, nil
 	}
@@ -1165,6 +1387,7 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 	s.orders[order.ID] = order
 
 	s.replaceOrderAllocationsWithCompletedLocked(order.ID, productionDate, req.ProducedQuantity)
+	s.bumpLineRevisionLocked(order.LineID)
 	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", remaining "+strconv.Itoa(order.Quantity)+" returned to pending")
 	return productionConfirmResponse{Order: order, Remainder: &order}, nil
 }
@@ -1404,6 +1627,195 @@ func (s *MemoryStore) CreateDemoConflictOrders(req demoConflictRequest, claims a
 	return orders, nil
 }
 
+func (s *MemoryStore) CreateHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.resetHPAPeakDemoLocked(claims.Subject)
+	now := time.Now().UTC()
+	for lineIndex := hpaDemoFirstLine; lineIndex <= hpaDemoLastLine; lineIndex++ {
+		lineID := hpaDemoLineID(lineIndex)
+		s.lines[lineID] = domain.ProductionLine{
+			ID:             lineID,
+			Name:           "HPA Demo Line " + lineID,
+			CapacityPerDay: 10000,
+		}
+		orderIDs := make([]string, 0, hpaDemoOrdersPerLine)
+		for orderIndex := 1; orderIndex <= hpaDemoOrdersPerLine; orderIndex++ {
+			id := fmt.Sprintf("HPA-%s-%03d", lineID, orderIndex)
+			order := domain.Order{
+				ID:        id,
+				Customer:  "HPA Demo",
+				LineID:    lineID,
+				Quantity:  2500,
+				Priority:  domain.PriorityLow,
+				Status:    domain.StatusPending,
+				DueDate:   now.AddDate(0, 0, 7),
+				Note:      hpaDemoSource,
+				CreatedBy: claims.Subject,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			s.orders[id] = order
+			orderIDs = append(orderIDs, id)
+		}
+
+		jobID := "HPA-JOB-" + lineID
+		s.jobs[jobID] = domain.ScheduleJob{
+			ID:        jobID,
+			LineID:    lineID,
+			Status:    domain.JobQueued,
+			Message:   "多產線排程尖峰任務已送入背景佇列。",
+			Source:    hpaDemoSource,
+			OrderIDs:  orderIDs,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		s.auditLocked(claims.Subject, "schedule.job.create", jobID, hpaDemoSource)
+	}
+	return s.hpaPeakSummaryLocked(), nil
+}
+
+func (s *MemoryStore) ClearHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.clearHPAPeakDemoLocked(claims.Subject)
+	return s.hpaPeakSummaryLocked(), nil
+}
+
+func (s *MemoryStore) HPAPeakSummary() hpaPeakSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hpaPeakSummaryLocked()
+}
+
+func (s *MemoryStore) HPAPeakJobs() []domain.ScheduleJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	jobs := []domain.ScheduleJob{}
+	for _, job := range s.jobs {
+		if job.Source == hpaDemoSource || isHPADemoLine(job.LineID) {
+			jobs = append(jobs, job)
+		}
+	}
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].ID < jobs[j].ID
+	})
+	return jobs
+}
+
+func (s *MemoryStore) clearHPAPeakDemoLocked(actorID string) {
+	for id, job := range s.jobs {
+		if job.Source == hpaDemoSource || isHPADemoLine(job.LineID) {
+			if job.Status == domain.JobQueued || job.Status == domain.JobRunning {
+				job.Status = domain.JobCancelled
+				job.Message = "排程尖峰展示已取消。"
+				job.UpdatedAt = time.Now().UTC()
+				s.jobs[id] = job
+				continue
+			}
+			delete(s.jobs, id)
+		}
+	}
+	for id, order := range s.orders {
+		if isHPADemoLine(order.LineID) {
+			delete(s.orders, id)
+		}
+	}
+	keptAllocations := s.allocations[:0]
+	for _, allocation := range s.allocations {
+		if !isHPADemoLine(allocation.LineID) {
+			keptAllocations = append(keptAllocations, allocation)
+		}
+	}
+	s.allocations = keptAllocations
+	for lineID := range s.lines {
+		if isHPADemoLine(lineID) {
+			delete(s.lines, lineID)
+		}
+	}
+	keptAudits := s.audits[:0]
+	for _, audit := range s.audits {
+		if audit.Reason == hpaDemoSource {
+			continue
+		}
+		if job, ok := s.jobs[audit.Resource]; ok && isHPADemoLine(job.LineID) {
+			continue
+		}
+		keptAudits = append(keptAudits, audit)
+	}
+	s.audits = keptAudits
+	if actorID != "" {
+		s.auditLocked(actorID, "demo.hpa_peak.clear", hpaDemoSource, hpaDemoSource)
+	}
+}
+
+func (s *MemoryStore) resetHPAPeakDemoLocked(actorID string) {
+	s.clearHPAPeakDemoLocked(actorID)
+	for id, job := range s.jobs {
+		if job.Source == hpaDemoSource || isHPADemoLine(job.LineID) {
+			delete(s.jobs, id)
+		}
+	}
+}
+
+func (s *MemoryStore) hpaPeakSummaryLocked() hpaPeakSummary {
+	statuses := map[string]int{
+		string(domain.JobQueued):    0,
+		string(domain.JobRunning):   0,
+		string(domain.JobCompleted): 0,
+		string(domain.JobFailed):    0,
+		string(domain.JobCancelled): 0,
+	}
+	lineIDs := map[string]bool{}
+	orderCount := 0
+	failedMessages := []string{}
+	recentJobs := []domain.ScheduleJob{}
+	for _, order := range s.orders {
+		if isHPADemoLine(order.LineID) {
+			orderCount++
+			lineIDs[order.LineID] = true
+		}
+	}
+	for _, line := range s.lines {
+		if isHPADemoLine(line.ID) {
+			lineIDs[line.ID] = true
+		}
+	}
+	for _, job := range s.jobs {
+		if job.Source != hpaDemoSource && !isHPADemoLine(job.LineID) {
+			continue
+		}
+		statuses[string(job.Status)]++
+		recentJobs = append(recentJobs, job)
+		if job.Status == domain.JobFailed && job.Message != "" && len(failedMessages) < 5 {
+			failedMessages = append(failedMessages, job.ID+"："+job.Message)
+		}
+	}
+	sort.Slice(recentJobs, func(i, j int) bool {
+		return recentJobs[i].ID < recentJobs[j].ID
+	})
+	if len(recentJobs) > 10 {
+		recentJobs = recentJobs[:10]
+	}
+	return hpaPeakSummary{
+		LineCount:      len(lineIDs),
+		OrderCount:     orderCount,
+		JobCount:       statuses[string(domain.JobQueued)] + statuses[string(domain.JobRunning)] + statuses[string(domain.JobCompleted)] + statuses[string(domain.JobFailed)] + statuses[string(domain.JobCancelled)],
+		Statuses:       statuses,
+		Topic:          "woms.schedule.jobs",
+		ConsumerGroup:  "woms-scheduler-workers",
+		HPAName:        "woms-woms-worker-hpa",
+		DeploymentName: "woms-woms-worker",
+		Reason:         "幾百條產線同時進行月底排程，Kafka lag 上升時 KEDA 會擴充 scheduler-worker pods。",
+		WatchCommand:   "kubectl get hpa,deploy,pod -n woms -w",
+		FailedMessages: failedMessages,
+		RecentJobs:     recentJobs,
+	}
+}
+
 func (s *MemoryStore) removeAllocationsLocked(orderID string) {
 	kept := s.allocations[:0]
 	for _, allocation := range s.allocations {
@@ -1570,6 +1982,43 @@ func normalizedPreviewRequest(req scheduleRequest) scheduleRequest {
 	return normalized
 }
 
+func requestHash(req scheduleRequest) string {
+	payload, _ := json.Marshal(req)
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func scheduleLineID(req scheduleRequest, claims auth.Claims) string {
+	if req.LineID != "" {
+		return req.LineID
+	}
+	if claims.Role == domain.RoleScheduler {
+		return claims.LineID
+	}
+	return ""
+}
+
+func hpaDemoLineID(index int) string {
+	return fmt.Sprintf("L%03d", index)
+}
+
+func isHPADemoLine(lineID string) bool {
+	if len(lineID) != 4 || lineID[0] != 'L' {
+		return false
+	}
+	index, err := strconv.Atoi(lineID[1:])
+	return err == nil && index >= hpaDemoFirstLine && index <= hpaDemoLastLine
+}
+
+func (s *MemoryStore) bumpLineRevisionLocked(lineID string) {
+	line, ok := s.lines[lineID]
+	if !ok {
+		return
+	}
+	line.ScheduleRevision++
+	s.lines[lineID] = line
+}
+
 func sameScheduleRequest(a, b scheduleRequest) bool {
 	if a.LineID != b.LineID || a.StartDate != b.StartDate || a.CurrentDate != b.CurrentDate || a.ManualForce != b.ManualForce || a.AllowLateCompletion != b.AllowLateCompletion || a.Reason != b.Reason {
 		return false
@@ -1625,7 +2074,111 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	writeJSON(w, status, map[string]string{"error": zhUserMessage(message)})
+}
+
+func zhUserMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "操作失敗，請稍後再試。"
+	}
+	if containsCJK(message) {
+		return message
+	}
+	if strings.HasPrefix(message, "json: unknown field ") {
+		return "請求包含不支援的欄位。"
+	}
+	if strings.HasPrefix(message, "order not found: ") {
+		return "找不到訂單：" + strings.TrimPrefix(message, "order not found: ")
+	}
+	translations := map[string]string{
+		"route not found":                                              "找不到 API 路由。",
+		"method not allowed":                                           "不支援此 HTTP 方法。",
+		"invalid credentials":                                          "帳號或密碼錯誤。",
+		"unauthorized":                                                 "請先登入後再操作。",
+		"only sales can create orders":                                 "只有業務可以建立訂單。",
+		"only sales can confirm preview orders":                        "只有業務可以確認訂單預覽。",
+		"only schedulers can reject orders":                            "只有排程工程師可以駁回訂單。",
+		"only sales can resubmit rejected orders":                      "只有業務可以重新送出被駁回的訂單。",
+		"only admin can manage accounts":                               "只有管理員可以管理帳號。",
+		"only admin or schedulers can create demo conflict orders":     "只有管理員或排程工程師可以建立衝突展示訂單。",
+		"only schedulers can create schedule jobs":                     "只有排程工程師可以建立排程任務。",
+		"schedule job not found":                                       "找不到排程任務。",
+		"only schedulers can confirm production":                       "只有排程工程師可以回報生產。",
+		"only schedulers can start production":                         "只有排程工程師可以開始生產。",
+		"order not found":                                              "找不到訂單。",
+		"cannot update another production line":                        "不能更新其他產線的訂單。",
+		"sales can update only their own orders":                       "業務只能更新自己的訂單。",
+		"role cannot update orders":                                    "此角色不能更新訂單。",
+		"only pending or rejected orders can change order details":     "只有待排程或需業務處理的訂單可以變更內容。",
+		"note cannot be updated after order creation":                  "備註建立後不能修改。",
+		"dueDate must use YYYY-MM-DD":                                  "交期格式必須是 YYYY-MM-DD。",
+		"quantity must be between 25 and 2500":                         "數量必須介於 25 到 2500。",
+		"production line does not exist":                               "產線不存在。",
+		"priority must be low or high":                                 "優先級必須是 low 或 high。",
+		"orderIds is required":                                         "請至少選取一張訂單。",
+		"rejection reason is required":                                 "請填寫駁回理由。",
+		"rejection reason must be 240 characters or fewer":             "駁回理由最多 240 個字。",
+		"cannot reject another production line":                        "不能駁回其他產線的訂單。",
+		"only pending orders can be rejected":                          "只有待排程訂單可以被駁回。",
+		"sales can resubmit only their own orders":                     "只能重新送出自己的訂單。",
+		"only rejected orders can be resubmitted":                      "只有需業務處理的訂單可以重新送出。",
+		"sales can delete only their own orders":                       "業務只能刪除自己的訂單。",
+		"cannot delete another production line":                        "不能刪除其他產線的訂單。",
+		"role cannot delete orders":                                    "此角色不能刪除訂單。",
+		"cannot delete in-progress or completed orders":                "不能刪除生產中或已完成的訂單。",
+		"user not found":                                               "找不到使用者。",
+		"role must be admin, sales, or scheduler":                      "角色必須是 admin、sales 或 scheduler。",
+		"scheduler lineId must be A, B, C, or D":                       "排程工程師的產線必須存在。",
+		"previewId is required before creating a schedule job":         "建立排程任務前必須先完成試排。",
+		"preview result expired or not found":                          "試排結果已過期或不存在。",
+		"preview result belongs to another user":                       "試排結果屬於其他使用者。",
+		"schedule request changed after preview":                       "排程請求與試排內容不同，請重新試排。",
+		"cannot schedule another production line":                      "不能排程其他產線。",
+		"lineId is required":                                           "請選擇產線。",
+		"cannot access another production line":                        "不能存取其他產線。",
+		"month must use YYYY-MM":                                       "月份格式必須是 YYYY-MM。",
+		"only admin or schedulers can read schedule history":           "只有管理員或排程工程師可以讀取排程紀錄。",
+		"only scheduled orders can start production":                   "只有已排程訂單可以開始生產。",
+		"scheduled order has no allocation":                            "已排程訂單沒有分配紀錄。",
+		"cannot start another production line":                         "不能開始其他產線的生產。",
+		"cannot confirm another production line":                       "不能回報其他產線的生產。",
+		"only in-progress orders can be confirmed":                     "只有生產中訂單可以回報生產。",
+		"producedQuantity must be greater than zero":                   "完成片數必須大於 0。",
+		"productionDate must use YYYY-MM-DD":                           "生產日期格式必須是 YYYY-MM-DD。",
+		"scheduled allocation not found for productionDate":            "找不到該生產日期的排程。",
+		"productionDate has already been confirmed":                    "該生產日期已經回報過。",
+		"producedQuantity cannot exceed scheduled allocation quantity": "完成片數不能超過本日排程量。",
+		"manual force requires a reason":                               "人工介入必須填寫原因。",
+		"startDate must use YYYY-MM-DD":                                "開始日期格式必須是 YYYY-MM-DD。",
+		"currentDate must use YYYY-MM-DD":                              "目前日期格式必須是 YYYY-MM-DD。",
+		"only sales can preview draft orders":                          "只有業務可以試排草稿訂單。",
+		"draft order line must match preview line":                     "草稿訂單產線必須符合試排產線。",
+		"draft previews cannot include resolution orders":              "草稿試排不能包含解法訂單。",
+		"resolution order not found":                                   "找不到解法訂單。",
+		"resolution order line must match preview line":                "解法訂單產線必須符合試排產線。",
+		"resolution orders must be low-priority scheduled orders without locked or completed allocations": "解法訂單必須是低優先級、已排程、且沒有鎖定或已完成分配的訂單。",
+		"preview does not contain a draft order":                                                          "試排結果不包含草稿訂單。",
+		"cannot create demo orders for another production line":                                           "不能為其他產線建立展示訂單。",
+		"count must be between 5 and 20":                                                                  "數量必須介於 5 到 20。",
+		"customer is required and quantity must be between 25 and 2500":                                   "請填寫客戶，且數量必須介於 25 到 2500。",
+		"note must be 120 characters or fewer":                                                            "備註最多 120 個字。",
+		"schedule conflicts require review":                                                               "排程結果仍有衝突，請重新檢查後再送出。",
+		"invalid schedule request":                                                                        "排程請求無效。",
+	}
+	if translated, ok := translations[message]; ok {
+		return translated
+	}
+	return "操作失敗，請稍後再試。"
+}
+
+func containsCJK(value string) bool {
+	for _, r := range value {
+		if (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3400 && r <= 0x4DBF) {
+			return true
+		}
+	}
+	return false
 }
 
 func setSecurityHeaders(w http.ResponseWriter) {

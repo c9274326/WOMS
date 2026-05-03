@@ -36,9 +36,10 @@ type User struct {
 }
 
 type ProductionLine struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	CapacityPerDay int    `json:"capacityPerDay"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	CapacityPerDay   int    `json:"capacityPerDay"`
+	ScheduleRevision int64  `json:"scheduleRevision"`
 }
 
 type Order struct {
@@ -83,15 +84,24 @@ const (
 	JobRunning   ScheduleJobStatus = "running"
 	JobCompleted ScheduleJobStatus = "completed"
 	JobFailed    ScheduleJobStatus = "failed"
+	JobCancelled ScheduleJobStatus = "cancelled"
 )
 
 type ScheduleJob struct {
-	ID        string            `json:"id"`
-	LineID    string            `json:"lineId"`
-	Status    ScheduleJobStatus `json:"status"`
-	Message   string            `json:"message,omitempty"`
-	CreatedAt time.Time         `json:"createdAt"`
-	UpdatedAt time.Time         `json:"updatedAt"`
+	ID           string            `json:"id"`
+	LineID       string            `json:"lineId"`
+	Status       ScheduleJobStatus `json:"status"`
+	Message      string            `json:"message,omitempty"`
+	Source       string            `json:"source,omitempty"`
+	PreviewID    string            `json:"previewId,omitempty"`
+	RequestHash  string            `json:"requestHash,omitempty"`
+	LineRevision int64             `json:"lineRevision,omitempty"`
+	AttemptCount int               `json:"attemptCount,omitempty"`
+	OrderIDs     []string          `json:"orderIds,omitempty"`
+	StartedAt    time.Time         `json:"startedAt,omitempty"`
+	CompletedAt  time.Time         `json:"completedAt,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
 }
 
 type AuditEntry struct {

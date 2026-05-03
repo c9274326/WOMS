@@ -82,11 +82,15 @@ cp .env.example .env
 重要設定：
 
 - `JWT_SECRET`：JWT 簽章密鑰，正式環境必須更換。
+- `API_STORE`：API store backend；Helm/Docker 預設 `postgres`，測試可使用 memory。
 - `DEMO_SEED_DATA`：預設 `true`；設為 `false` 可不載入 demo orders。
 - `DATABASE_URL`：PostgreSQL 連線字串。
 - `REDIS_ADDR`：Redis 位址。
 - `KAFKA_BROKERS`：Kafka broker 清單。
 - `KAFKA_SCHEDULE_TOPIC`：排程任務 topic。
+- `KAFKA_PUBLISH_ENABLED`：是否由 API publish 排程任務到 Kafka，預設 `true`。
+- `WORKER_MIN_JOB_DURATION_MS`：worker 每個 job 的 demo 最小處理時間，正式環境可設為 `0`。
+- `WORKER_MAX_RETRIES`：worker 遇到暫時性 DB/Kafka 錯誤時的最大重試次數。
 - `DOCKERHUB_NAMESPACE`：Docker Hub namespace。
 - `WOMS_IMAGE_TAG`：Docker Compose 使用的 image tag，預設 `latest`。
 
@@ -218,7 +222,8 @@ helm upgrade --install woms ./deploy/helm/woms \
   --set keda.kafka.bootstrapServers=<kafka-bootstrap>:9092 \
   --set keda.kafka.lagThreshold=1 \
   --set keda.maxReplicaCount=4 \
-  --set keda.cooldownPeriod=60
+  --set keda.cooldownPeriod=60 \
+  --set worker.env.minJobDurationMs=500
 ```
 
 如果本機 cluster 還沒有可連線的 Kafka broker，可以保留同一份 chart，但先關閉 Kafka trigger 做 KEDA/HPA smoke check：
@@ -237,15 +242,7 @@ helm upgrade --install woms ./deploy/helm/woms \
   --set keda.kafka.enabled=false
 ```
 
-用能連到同一個 bootstrap server 的 Kafka client 送入 backlog：
-
-```bash
-for i in $(seq 1 100); do
-  printf '{"jobId":"hpa-demo-%s","lineId":"A","reason":"local-hpa-demo"}\n' "$i"
-done | kafka-console-producer.sh \
-  --bootstrap-server <kafka-bootstrap>:9092 \
-  --topic woms.schedule.jobs
-```
+用 admin 登入 web，開啟「多產線排程尖峰」面板並按「建立多產線排程尖峰」。API 會先清除 `L001-L200` 舊資料，再建立 200 條 demo 產線、1,000 張待排程訂單與 200 個排程任務，並 publish 到 Kafka topic `woms.schedule.jobs`。worker 會用 consumer group `woms-scheduler-workers` 消化 backlog；demo command 會設定 `worker.env.minJobDurationMs=500`，讓本機環境比較容易觀察 HPA scale-up，正式環境預設為 `0`。
 
 觀察 KEDA 建立 HPA 並擴展 worker：
 

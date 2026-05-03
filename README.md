@@ -82,11 +82,15 @@ cp .env.example .env
 Important settings:
 
 - `JWT_SECRET`: JWT signing secret. Replace it in production.
+- `API_STORE`: API store backend. Helm and Docker default to `postgres`; tests can use memory.
 - `DEMO_SEED_DATA`: defaults to `true`; set to `false` to start the API without demo orders.
 - `DATABASE_URL`: PostgreSQL connection string.
 - `REDIS_ADDR`: Redis address.
 - `KAFKA_BROKERS`: Kafka broker list.
 - `KAFKA_SCHEDULE_TOPIC`: schedule job topic.
+- `KAFKA_PUBLISH_ENABLED`: controls whether the API publishes schedule jobs to Kafka. Defaults to `true`.
+- `WORKER_MIN_JOB_DURATION_MS`: demo minimum worker time per job. Production deployments can set it to `0`.
+- `WORKER_MAX_RETRIES`: maximum worker retries for transient DB/Kafka errors.
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
 - `WOMS_IMAGE_TAG`: Docker image tag used by Docker Compose. Defaults to `latest` so Compose builds and local runs stay aligned with the Docker Hub `latest` tag.
 
@@ -217,7 +221,8 @@ helm upgrade --install woms ./deploy/helm/woms \
   --set keda.kafka.bootstrapServers=<kafka-bootstrap>:9092 \
   --set keda.kafka.lagThreshold=1 \
   --set keda.maxReplicaCount=4 \
-  --set keda.cooldownPeriod=60
+  --set keda.cooldownPeriod=60 \
+  --set worker.env.minJobDurationMs=500
 ```
 
 If the local cluster does not have a reachable Kafka broker yet, keep the same chart but disable the Kafka trigger for a KEDA/HPA smoke check:
@@ -236,15 +241,7 @@ helm upgrade --install woms ./deploy/helm/woms \
   --set keda.kafka.enabled=false
 ```
 
-Generate a small backlog from any Kafka client that can reach the same bootstrap server:
-
-```bash
-for i in $(seq 1 100); do
-  printf '{"jobId":"hpa-demo-%s","lineId":"A","reason":"local-hpa-demo"}\n' "$i"
-done | kafka-console-producer.sh \
-  --bootstrap-server <kafka-bootstrap>:9092 \
-  --topic woms.schedule.jobs
-```
+Log in to the web UI as admin, open the "multi-line scheduling peak" panel, and click the peak creation button. The API clears old `L001-L200` data, creates 200 demo lines, 1,000 pending orders, and 200 scheduling jobs, then publishes them to Kafka topic `woms.schedule.jobs`. Workers consume the backlog with consumer group `woms-scheduler-workers`; the demo command sets `worker.env.minJobDurationMs=500` so local clusters have enough time to observe HPA scale-up. Production deployments default to `0`.
 
 Watch KEDA create the HPA and scale the worker:
 

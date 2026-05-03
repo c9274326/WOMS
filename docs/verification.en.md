@@ -115,7 +115,7 @@ kubectl get scaledobject,hpa -n woms
 kubectl describe scaledobject -n woms
 ```
 
-After sending many Kafka scheduling messages:
+Log in to the web UI as admin and click the multi-line scheduling peak creation button. Confirm that the panel shows 200 lines, 1,000 orders, 200 queued jobs, and the Kafka topic, consumer group, HPA, and deployment names. Then watch:
 
 ```bash
 kubectl get deploy -n woms -w
@@ -129,6 +129,7 @@ Expected:
 - Worker replicas rise above `minReplicaCount`.
 - Replicas scale down after lag drains and cooldown passes.
 - If CPU trigger does not work, verify metrics-server and pod resource requests first.
+- After the demo, click the clear peak data button and confirm `L001-L200` orders and jobs are removed.
 
 ## 7. Redis Lock Verification
 
