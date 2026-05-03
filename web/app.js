@@ -1,6 +1,7 @@
 import {
   conflictExplanation,
   customerFilterValues,
+  canDropPendingOrderOnDate,
   defaultLine,
   escapeHtml,
   exactFilterOrders,
@@ -10,6 +11,7 @@ import {
   priorityClass,
   priorityLabel,
   isFutureDateKey,
+  shouldPreviewDroppedOrders,
   sortOrdersForWorkstation,
   statusClass,
   statusCounts,
@@ -741,7 +743,12 @@ function renderCalendar() {
       event.preventDefault();
       cell.classList.remove("drop-target");
       const orderIds = droppedOrderIds(event.dataTransfer);
-      if (orderIds.length > 0 && canScheduleOnDate(day.key)) {
+      if (shouldPreviewDroppedOrders({
+        orderIds,
+        role: state.user?.role,
+        dateKey: day.key,
+        todayKey: dateInputValue(new Date()),
+      })) {
         await scheduleDroppedOrders(orderIds, day.key);
       }
     });
@@ -1501,7 +1508,11 @@ function allConflictAcknowledgementsChecked() {
 }
 
 function canScheduleOnDate(dateKey) {
-  return state.user?.role === "scheduler" && dateKey > dateInputValue(new Date());
+  return canDropPendingOrderOnDate({
+    role: state.user?.role,
+    dateKey,
+    todayKey: dateInputValue(new Date()),
+  });
 }
 
 function conflictsCanBeManuallyForced(conflicts) {
