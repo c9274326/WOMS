@@ -3,6 +3,8 @@ global:
 
 api:
   replicaCount: 2
+  pdb:
+    minAvailable: 1
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-api
     tag: v0.1.18
@@ -36,6 +38,8 @@ worker:
 
 web:
   replicaCount: 2
+  pdb:
+    minAvailable: 1
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-web
     tag: v0.1.18
@@ -63,7 +67,17 @@ keda:
   maxReplicaCount: 10
   pollingInterval: 30
   cooldownPeriod: 120
+  hpa:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      percent: 100
+      periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      percent: 50
+      periodSeconds: 60
   kafka:
+    enabled: true
     bootstrapServers: kafka:9092
     topic: woms.schedule.jobs
     consumerGroup: woms-scheduler-workers

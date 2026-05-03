@@ -196,6 +196,86 @@ helm upgrade --install woms ./deploy/helm/woms \
   --set web.image.tag=<tag>
 ```
 
+### Scheduler Worker HPA Demo
+
+The HPA scenario for WOMS is the scheduler-worker backlog. During end-of-day planning or rush-order recovery, the API publishes many scheduling jobs to Kafka topic `woms.schedule.jobs`. The scheduler workers share consumer group `woms-scheduler-workers`; when lag exceeds `keda.kafka.lagThreshold`, KEDA creates and drives the HPA named `woms-woms-worker-hpa` for deployment `woms-woms-worker`. CPU utilization is kept as a secondary trigger for compute-heavy scheduling bursts.
+
+For a local Kubernetes demo, use a low Kafka lag threshold so the scale-up is visible with a small message burst:
+
+```bash
+helm upgrade --install woms ./deploy/helm/woms \
+  --namespace woms --create-namespace \
+  --set ingress.enabled=false \
+  --set api.jwtSecret=local-dev-secret \
+  --set global.imagePullPolicy=IfNotPresent \
+  --set api.image.repository=woms-api \
+  --set worker.image.repository=woms-scheduler-worker \
+  --set web.image.repository=woms-web \
+  --set api.image.tag=local \
+  --set worker.image.tag=local \
+  --set web.image.tag=local \
+  --set keda.kafka.bootstrapServers=<kafka-bootstrap>:9092 \
+  --set keda.kafka.lagThreshold=1 \
+  --set keda.maxReplicaCount=4 \
+  --set keda.cooldownPeriod=60
+```
+
+If the local cluster does not have a reachable Kafka broker yet, keep the same chart but disable the Kafka trigger for a KEDA/HPA smoke check:
+
+```bash
+helm upgrade --install woms ./deploy/helm/woms \
+  --namespace woms --create-namespace \
+  --set ingress.enabled=false \
+  --set api.jwtSecret=local-dev-secret \
+  --set api.image.repository=nginx \
+  --set api.image.tag=stable-alpine \
+  --set worker.image.repository=nginx \
+  --set worker.image.tag=stable-alpine \
+  --set web.image.repository=nginx \
+  --set web.image.tag=stable-alpine \
+  --set keda.kafka.enabled=false
+```
+
+Generate a small backlog from any Kafka client that can reach the same bootstrap server:
+
+```bash
+for i in $(seq 1 100); do
+  printf '{"jobId":"hpa-demo-%s","lineId":"A","reason":"local-hpa-demo"}\n' "$i"
+done | kafka-console-producer.sh \
+  --bootstrap-server <kafka-bootstrap>:9092 \
+  --topic woms.schedule.jobs
+```
+
+Watch KEDA create the HPA and scale the worker:
+
+```bash
+kubectl get scaledobject,hpa,deploy -n woms
+kubectl get hpa woms-woms-worker-hpa -n woms -w
+kubectl get deploy woms-woms-worker -n woms -w
+NAMESPACE=woms ./scripts/verify-k8s.sh
+```
+
+### API And Web High Availability Demo
+
+The non-HPA high-availability scenario is voluntary disruption protection for the request path. API and web run with two replicas by default, and the Helm chart creates `PodDisruptionBudget` resources `woms-woms-api` and `woms-woms-web` with `minAvailable: 1`. During node drain, cluster upgrades, or other voluntary evictions, Kubernetes must keep at least one API pod and one web pod available.
+
+Verify the resources after deployment:
+
+```bash
+kubectl get deploy,pdb -n woms
+kubectl describe pdb woms-woms-api -n woms
+kubectl describe pdb woms-woms-web -n woms
+```
+
+On a multi-node local cluster, drain one worker node and keep watching API/web availability:
+
+```bash
+kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data
+kubectl get deploy,pod,pdb -n woms -w
+curl -i http://<ingress-or-forwarded-web-url>/
+kubectl uncordon <node-name>
+```
+
 ## CI/CD
 
 GitHub Actions runs:
@@ -205,6 +285,7 @@ GitHub Actions runs:
 - `gofmt` check
 - API, worker, and web Docker builds
 - Helm rendering
+- Scheduler worker HPA/KEDA render verification with `./scripts/verify-hpa-render.sh`
 - Docker Hub push and tagging on `main`, `release/**`, or manual dispatch
 - Automatic Helm image tag update on `main`
 - Automatic Git tag creation on every successful `main` publish, using `v0.1.<run-number>` by default

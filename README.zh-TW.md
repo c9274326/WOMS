@@ -197,6 +197,86 @@ helm upgrade --install woms ./deploy/helm/woms \
   --set web.image.tag=<tag>
 ```
 
+### Scheduler Worker HPA Demo
+
+WOMS 的 HPA 情境是 scheduler-worker backlog。月底排程或急單復原時，API 會把大量排程任務送到 Kafka topic `woms.schedule.jobs`。scheduler workers 共用 consumer group `woms-scheduler-workers`；當 lag 超過 `keda.kafka.lagThreshold`，KEDA 會建立並驅動 deployment `woms-woms-worker` 的 HPA `woms-woms-worker-hpa`。CPU utilization 保留為第二 trigger，用來支援排程計算尖峰。
+
+本機 Kubernetes demo 可把 Kafka lag threshold 調低，讓少量訊息就能看見 scale-up：
+
+```bash
+helm upgrade --install woms ./deploy/helm/woms \
+  --namespace woms --create-namespace \
+  --set ingress.enabled=false \
+  --set api.jwtSecret=local-dev-secret \
+  --set global.imagePullPolicy=IfNotPresent \
+  --set api.image.repository=woms-api \
+  --set worker.image.repository=woms-scheduler-worker \
+  --set web.image.repository=woms-web \
+  --set api.image.tag=local \
+  --set worker.image.tag=local \
+  --set web.image.tag=local \
+  --set keda.kafka.bootstrapServers=<kafka-bootstrap>:9092 \
+  --set keda.kafka.lagThreshold=1 \
+  --set keda.maxReplicaCount=4 \
+  --set keda.cooldownPeriod=60
+```
+
+如果本機 cluster 還沒有可連線的 Kafka broker，可以保留同一份 chart，但先關閉 Kafka trigger 做 KEDA/HPA smoke check：
+
+```bash
+helm upgrade --install woms ./deploy/helm/woms \
+  --namespace woms --create-namespace \
+  --set ingress.enabled=false \
+  --set api.jwtSecret=local-dev-secret \
+  --set api.image.repository=nginx \
+  --set api.image.tag=stable-alpine \
+  --set worker.image.repository=nginx \
+  --set worker.image.tag=stable-alpine \
+  --set web.image.repository=nginx \
+  --set web.image.tag=stable-alpine \
+  --set keda.kafka.enabled=false
+```
+
+用能連到同一個 bootstrap server 的 Kafka client 送入 backlog：
+
+```bash
+for i in $(seq 1 100); do
+  printf '{"jobId":"hpa-demo-%s","lineId":"A","reason":"local-hpa-demo"}\n' "$i"
+done | kafka-console-producer.sh \
+  --bootstrap-server <kafka-bootstrap>:9092 \
+  --topic woms.schedule.jobs
+```
+
+觀察 KEDA 建立 HPA 並擴展 worker：
+
+```bash
+kubectl get scaledobject,hpa,deploy -n woms
+kubectl get hpa woms-woms-worker-hpa -n woms -w
+kubectl get deploy woms-woms-worker -n woms -w
+NAMESPACE=woms ./scripts/verify-k8s.sh
+```
+
+### API And Web High Availability Demo
+
+HPA 之外的 high availability 情境是 request path 的 voluntary disruption protection。API 與 web 預設各有兩個 replicas，Helm chart 會建立 `PodDisruptionBudget` `woms-woms-api` 與 `woms-woms-web`，並設定 `minAvailable: 1`。當 node drain、cluster upgrade 或其他 voluntary eviction 發生時，Kubernetes 必須保留至少一個 API pod 與一個 web pod 可服務。
+
+部署後確認資源：
+
+```bash
+kubectl get deploy,pdb -n woms
+kubectl describe pdb woms-woms-api -n woms
+kubectl describe pdb woms-woms-web -n woms
+```
+
+在多節點本機 cluster 上，可以 drain 一個 worker node 並持續觀察 API/web 可用性：
+
+```bash
+kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data
+kubectl get deploy,pod,pdb -n woms -w
+curl -i http://<ingress-or-forwarded-web-url>/
+kubectl uncordon <node-name>
+```
+
 ## CI/CD
 
 GitHub Actions 會執行：
@@ -206,6 +286,7 @@ GitHub Actions 會執行：
 - `gofmt` check
 - API、worker 與 web Docker builds
 - Helm rendering
+- 使用 `./scripts/verify-hpa-render.sh` 驗證 scheduler worker HPA/KEDA render
 - 在 `main`、`release/**` 或 manual dispatch 時推送 Docker Hub image 與 tag
 - 在 `main` 自動更新 Helm image tag
 - 每次 `main` publish 成功後自動建立 Git tag，預設格式為 `v0.1.<run-number>`
