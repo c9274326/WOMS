@@ -61,5 +61,5 @@ VALUES
     ('A', 'Line A', 10000, 'Asia/Taipei'),
     ('B', 'Line B', 10000, 'Asia/Taipei'),
     ('C', 'Line C', 10000, 'Asia/Taipei'),
-    ('D', 'Line D', 10000, 'Asia/Taipei')
+    ('D', 'Line D', 10000, 'Europe/London')
 ON CONFLICT (id) DO NOTHING;

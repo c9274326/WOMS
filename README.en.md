@@ -139,7 +139,7 @@ Frontend behavior:
 - Users land on a dedicated login page until a valid session exists; internal pages are hidden before login.
 - Login is stored in browser `localStorage`, so refresh keeps the current session until the JWT expires or is rejected.
 - Admin users can assign account roles and scheduler production lines from the Admin panel. Non-admin users receive `403`.
-- Production line settings are loaded from `GET /api/lines`; each line includes a required IANA timezone, defaulting to `Asia/Taipei`. The active production line selector defaults to the lexicographically lowest line for sales/admin users and locks to the assigned line for scheduler users.
+- Production line settings are loaded from `GET /api/lines`; each line includes a required IANA timezone, defaulting to `Asia/Taipei`, while Line D is configured as `Europe/London`. The active production line selector defaults to the lexicographically lowest line for sales/admin users and locks to the assigned line for scheduler users.
 - Exact filters support customer and priority. Customer filtering opens as a compact menu, and its options are scoped by the active status and priority filters; order status is controlled by the left status panel.
 - Status counts are scoped to the active production line.
 - Calendar pages show persisted schedule capacity across the full six-week visible grid, including adjacent-month dates, with the remaining wafer capacity as the primary waterline value. Preview allocations stay on the preview confirmation page and do not change the main calendar.

@@ -25,7 +25,7 @@ const fallbackLines = ["A", "B", "C", "D"].map((id) => ({
   id,
   name: `Line ${id}`,
   capacityPerDay: 10000,
-  timezone: defaultTimezone,
+  timezone: id === "D" ? "Europe/London" : defaultTimezone,
 }));
 const priorities = ["low", "high"];
 

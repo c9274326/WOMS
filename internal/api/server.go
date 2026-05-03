@@ -450,7 +450,7 @@ func NewMemoryStore() *MemoryStore {
 			"A": {ID: "A", Name: "Line A", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
 			"B": {ID: "B", Name: "Line B", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
 			"C": {ID: "C", Name: "Line C", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
-			"D": {ID: "D", Name: "Line D", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
+			"D": {ID: "D", Name: "Line D", CapacityPerDay: 10000, Timezone: "Europe/London"},
 		},
 		users: map[string]domain.User{
 			"admin":       {ID: "user-admin", Username: "admin", PasswordHash: "demo", Role: domain.RoleAdmin},

@@ -126,6 +126,16 @@ func TestLinesAPIIncludesTimezone(t *testing.T) {
 	if len(payload.Lines) == 0 || payload.Lines[0].Timezone == "" {
 		t.Fatalf("expected line timezone in response, got %+v", payload.Lines)
 	}
+	var lineD domain.ProductionLine
+	for _, line := range payload.Lines {
+		if line.ID == "D" {
+			lineD = line
+			break
+		}
+	}
+	if lineD.Timezone != "Europe/London" {
+		t.Fatalf("expected Line D timezone Europe/London, got %+v", lineD)
+	}
 }
 
 func TestOnlyAdminCanAssignUsers(t *testing.T) {
