@@ -90,3 +90,6 @@ jobs:
 
       - name: Render Helm chart
         run: helm template woms ./deploy/helm/woms
+
+      - name: Verify scheduler worker HPA render
+        run: ./scripts/verify-hpa-render.sh

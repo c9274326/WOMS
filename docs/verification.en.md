@@ -79,6 +79,7 @@ Expected:
 
 ```bash
 helm template woms ./deploy/helm/woms
+./scripts/verify-hpa-render.sh
 ```
 
 Expected output includes:
@@ -86,6 +87,8 @@ Expected output includes:
 - `Deployment`: api, worker, web.
 - `Ingress`: public, api-secure.
 - `ScaledObject`: worker Kafka/CPU triggers.
+- `ScaledObject.spec.advanced.horizontalPodAutoscalerConfig.name`: `woms-woms-worker-hpa`.
+- `PodDisruptionBudget`: api and web with `minAvailable: 1`.
 
 ## 5. Ingress / Gateway Verification
 
@@ -117,6 +120,7 @@ After sending many Kafka scheduling messages:
 ```bash
 kubectl get deploy -n woms -w
 kubectl get hpa -n woms -w
+NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
 Expected:
@@ -128,6 +132,22 @@ Expected:
 
 ## 7. Redis Lock Verification
 
+## 7. API/Web High Availability Verification
+
+```bash
+kubectl get deploy,pdb -n woms
+kubectl describe pdb woms-woms-api -n woms
+kubectl describe pdb woms-woms-web -n woms
+```
+
+Expected:
+
+- API and web each run two replicas by default.
+- API and web PDBs each require `minAvailable: 1`.
+- During voluntary disruption on a multi-node cluster, at least one API and one web pod remain available.
+
+## 8. Redis Lock Verification
+
 Submit two concurrent schedule jobs for the same line:
 
 - Expected: no overlapping schedule version is created.
@@ -137,7 +157,7 @@ Submit jobs for different lines:
 
 - Expected: processing can run in parallel.
 
-## 8. Feature Completion Standard
+## 9. Feature Completion Standard
 
 - Tests pass.
 - README zh-TW/en is updated.
@@ -145,7 +165,7 @@ Submit jobs for different lines:
 - Docker/Helm/CI settings are synced.
 - `git add`, commit, and push are completed.
 
-## 9. Frontend Smoke Verification
+## 10. Frontend Smoke Verification
 
 - Login at `http://127.0.0.1:8081`.
 - Refresh the browser and confirm the session is restored.

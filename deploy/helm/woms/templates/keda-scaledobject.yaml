@@ -12,7 +12,24 @@ spec:
   maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
   pollingInterval: {{ .Values.keda.pollingInterval }}
   cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      name: {{ include "woms.fullname" . }}-worker-hpa
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: {{ .Values.keda.hpa.scaleUp.stabilizationWindowSeconds }}
+          policies:
+            - type: Percent
+              value: {{ .Values.keda.hpa.scaleUp.percent }}
+              periodSeconds: {{ .Values.keda.hpa.scaleUp.periodSeconds }}
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.keda.hpa.scaleDown.stabilizationWindowSeconds }}
+          policies:
+            - type: Percent
+              value: {{ .Values.keda.hpa.scaleDown.percent }}
+              periodSeconds: {{ .Values.keda.hpa.scaleDown.periodSeconds }}
   triggers:
+    {{- if .Values.keda.kafka.enabled }}
     - type: kafka
       metadata:
         bootstrapServers: {{ .Values.keda.kafka.bootstrapServers | quote }}
@@ -20,10 +37,11 @@ spec:
         consumerGroup: {{ .Values.keda.kafka.consumerGroup | quote }}
         lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}
         offsetResetPolicy: {{ .Values.keda.kafka.offsetResetPolicy | quote }}
+    {{- end }}
     {{- if .Values.keda.cpu.enabled }}
     - type: cpu
+      metricType: Utilization
       metadata:
-        type: Utilization
         value: {{ .Values.keda.cpu.targetUtilization | quote }}
     {{- end }}
 {{- end }}
