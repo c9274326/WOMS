@@ -827,6 +827,8 @@ type scheduleRequest struct {
 func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	req = defaultScheduleCurrentDate(req, now)
 	result, err := s.planLocked(req, claims)
 	if err != nil {
 		return schedulePreviewResponse{}, err
@@ -838,7 +840,7 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 		ActorRole:  claims.Role,
 		Request:    normalizedPreviewRequest(req),
 		DraftOrder: req.DraftOrder,
-		CreatedAt:  time.Now().UTC(),
+		CreatedAt:  now,
 	}
 	return schedulePreviewResponse{
 		PreviewID:   id,
@@ -852,6 +854,8 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims) (domain.ScheduleJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	req = defaultScheduleCurrentDate(req, now)
 
 	if req.PreviewID == "" {
 		return domain.ScheduleJob{}, errors.New("previewId is required before creating a schedule job")
@@ -875,7 +879,6 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 		return domain.ScheduleJob{}, errors.New("cannot schedule another production line")
 	}
 
-	now := time.Now().UTC()
 	id := "JOB-" + strconv.Itoa(s.nextJobID)
 	s.nextJobID++
 	job := domain.ScheduleJob{ID: id, LineID: jobLine, Status: domain.JobQueued, CreatedAt: now, UpdatedAt: now}
@@ -1568,6 +1571,13 @@ func normalizedPreviewRequest(req scheduleRequest) scheduleRequest {
 	sort.Strings(normalized.OrderIDs)
 	sort.Strings(normalized.ResolutionOrderIDs)
 	return normalized
+}
+
+func defaultScheduleCurrentDate(req scheduleRequest, now time.Time) scheduleRequest {
+	if req.CurrentDate == "" {
+		req.CurrentDate = truncateDate(now).Format(dateLayout)
+	}
+	return req
 }
 
 func sameScheduleRequest(a, b scheduleRequest) bool {

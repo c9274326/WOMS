@@ -68,6 +68,17 @@ func TestSchedulerCannotCreateScheduleJobWithoutPreview(t *testing.T) {
 	}
 }
 
+func TestDefaultScheduleCurrentDateUsesServerDayWhenMissing(t *testing.T) {
+	req := defaultScheduleCurrentDate(scheduleRequest{
+		LineID:    "A",
+		StartDate: "2026-05-01",
+	}, mustAPIDate(t, "2026-05-03"))
+
+	if req.CurrentDate != "2026-05-03" {
+		t.Fatalf("expected default current date from server day, got %q", req.CurrentDate)
+	}
+}
+
 func TestOnlyAdminCanAssignUsers(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
@@ -323,7 +334,7 @@ func TestSchedulerCannotReadAnotherLineCalendar(t *testing.T) {
 func TestSalesConfirmsDraftPreviewIntoPendingOrder(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+salesToken)
 	res := httptest.NewRecorder()
@@ -353,7 +364,7 @@ func TestSalesDraftPreviewDoesNotScheduleOtherPendingOrders(t *testing.T) {
 	salesToken := login(t, server, "sales", "demo")
 	createOrder(t, server, salesToken, "A")
 
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+salesToken)
 	res := httptest.NewRecorder()
@@ -388,7 +399,7 @@ func TestManualForceConflictCanCreateScheduleJobWithAudit(t *testing.T) {
 	createScheduleJob(t, server, schedulerA, "A")
 	createOrderWithPriority(t, server, salesToken, "A", "high")
 
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved"}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res := httptest.NewRecorder()
@@ -409,7 +420,7 @@ func TestManualForceConflictCanCreateScheduleJobWithAudit(t *testing.T) {
 		t.Fatalf("expected manual conflict with affected orders, got %+v", preview.Conflicts)
 	}
 
-	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved","previewId":"` + preview.PreviewID + `"}`)
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved","previewId":"` + preview.PreviewID + `"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res = httptest.NewRecorder()
@@ -446,7 +457,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	createScheduleJob(t, server, schedulerA, "A")
 	newOrderID := createOrderWithPriorityAndDue(t, server, salesToken, "A", "high", "2026-05-01")
 
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["` + newOrderID + `"]}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res := httptest.NewRecorder()
@@ -467,7 +478,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	}
 	movableOrderID := conflictPreview.Conflicts[0].AffectedOrderIDs[0]
 
-	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true}`)
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res = httptest.NewRecorder()
@@ -493,7 +504,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 		t.Fatalf("expected high priority order on due date and moved low priority order on next day, got %+v", solutionPreview.Allocations)
 	}
 
-	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true,"previewId":"` + solutionPreview.PreviewID + `"}`)
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true,"previewId":"` + solutionPreview.PreviewID + `"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res = httptest.NewRecorder()
@@ -889,7 +900,7 @@ func startProduction(t *testing.T, server *Server, token, orderID string) {
 func createScheduleJob(t *testing.T, server *Server, token, lineID string) string {
 	t.Helper()
 	previewID := createSchedulePreview(t, server, token, lineID)
-	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
+	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01","currentDate":"2026-04-30","previewId":"` + previewID + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res := httptest.NewRecorder()
@@ -908,7 +919,7 @@ func createScheduleJob(t *testing.T, server *Server, token, lineID string) strin
 
 func createSchedulePreview(t *testing.T, server *Server, token, lineID string) string {
 	t.Helper()
-	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01"}`)
+	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01","currentDate":"2026-04-30"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res := httptest.NewRecorder()

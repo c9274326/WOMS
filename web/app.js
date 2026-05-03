@@ -42,7 +42,7 @@ const state = {
 
 const today = new Date();
 const due = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
-document.querySelector('input[name="startDate"]').value = dateInputValue(today);
+document.querySelector('input[name="startDate"]').value = tomorrowDateInputValue();
 document.querySelector('input[name="dueDate"]').value = dateInputValue(due);
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
@@ -86,7 +86,7 @@ document.getElementById("order-form").addEventListener("submit", async (event) =
     const draftOrder = orderFormData();
     const result = await createPreview({
       lineId: activeLine(),
-      startDate: dateInputValue(new Date()),
+      startDate: tomorrowDateInputValue(),
       draftOrder,
     }, "sales-draft");
     openPreviewDialog(result);
@@ -280,7 +280,7 @@ document.getElementById("preview-page-list").addEventListener("click", async (ev
       return;
     }
     if (action === "retry-today") {
-      await retryPreview({ startDate: dateInputValue(new Date()), manualForce: false, reason: "" });
+      await retryPreview({ startDate: tomorrowDateInputValue(), manualForce: false, reason: "" });
       return;
     }
     if (action === "retry-suggested-start") {
@@ -1243,7 +1243,9 @@ function suggestedStartDate(preview) {
   const total = selected.reduce((sum, order) => sum + Number(order.quantity ?? 0), 0);
   const daysNeeded = Math.max(1, Math.ceil(total / 10000));
   earliestDue.setUTCDate(earliestDue.getUTCDate() - daysNeeded + 1);
-  return dateInputValue(earliestDue);
+  const suggested = dateInputValue(earliestDue);
+  const todayValue = dateInputValue(new Date());
+  return suggested <= todayValue ? tomorrowDateInputValue() : suggested;
 }
 
 function cssEscape(value) {
@@ -1346,7 +1348,7 @@ function scheduleFormData() {
   const data = Object.fromEntries(new FormData(document.getElementById("schedule-form")));
   data.lineId = activeLine();
   data.currentDate = dateInputValue(new Date());
-  data.startDate = data.currentDate;
+  data.startDate = tomorrowDateInputValue();
   data.manualForce = data.manualForce === "on";
   data.allowLateCompletion = false;
   data.orderIds = Array.from(state.selectedOrderIds);
@@ -1478,7 +1480,7 @@ function allConflictAcknowledgementsChecked() {
 }
 
 function canScheduleOnDate(dateKey) {
-  return state.user?.role === "scheduler" && dateKey >= dateInputValue(new Date());
+  return state.user?.role === "scheduler" && dateKey > dateInputValue(new Date());
 }
 
 function conflictsCanBeManuallyForced(conflicts) {
@@ -1507,6 +1509,12 @@ function formatDateTime(value) {
 
 function dateInputValue(value) {
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function tomorrowDateInputValue() {
+  const tomorrow = new Date();
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  return dateInputValue(tomorrow);
 }
 
 function monthKey(value) {

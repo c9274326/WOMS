@@ -102,6 +102,92 @@ func TestPlanRespectsFutureRequestedStartWhenCurrentDateIsEarlier(t *testing.T) 
 	}
 }
 
+func TestPlanStartsAfterCurrentDateWhenRequestedStartIsPast(t *testing.T) {
+	result, err := Plan(Request{
+		LineID:         "A",
+		CapacityPerDay: 10000,
+		StartDate:      mustDate(t, "2026-04-30"),
+		CurrentDate:    mustDate(t, "2026-05-01"),
+		Orders: []OrderInput{{
+			ID:       "ORD-FUTURE-1",
+			LineID:   "A",
+			Quantity: 2500,
+			Priority: domain.PriorityLow,
+			DueDate:  mustDate(t, "2026-05-05"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(result.Allocations) != 1 {
+		t.Fatalf("expected one allocation, got %+v", result.Allocations)
+	}
+	if !result.Allocations[0].Date.Equal(mustDate(t, "2026-05-02")) {
+		t.Fatalf("expected allocation after current date, got %+v", result.Allocations[0])
+	}
+}
+
+func TestPlanStartsAfterCurrentDateWhenRequestedStartIsToday(t *testing.T) {
+	result, err := Plan(Request{
+		LineID:         "A",
+		CapacityPerDay: 10000,
+		StartDate:      mustDate(t, "2026-05-01"),
+		CurrentDate:    mustDate(t, "2026-05-01"),
+		Orders: []OrderInput{{
+			ID:       "ORD-FUTURE-2",
+			LineID:   "A",
+			Quantity: 2500,
+			Priority: domain.PriorityLow,
+			DueDate:  mustDate(t, "2026-05-05"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(result.Allocations) != 1 {
+		t.Fatalf("expected one allocation, got %+v", result.Allocations)
+	}
+	if !result.Allocations[0].Date.Equal(mustDate(t, "2026-05-02")) {
+		t.Fatalf("expected allocation after current date, got %+v", result.Allocations[0])
+	}
+}
+
+func TestManualForcePlanStartsAfterCurrentDate(t *testing.T) {
+	result, err := Plan(Request{
+		LineID:         "A",
+		CapacityPerDay: 10000,
+		StartDate:      mustDate(t, "2026-05-01"),
+		CurrentDate:    mustDate(t, "2026-05-01"),
+		ManualForce:    true,
+		ExistingAllocations: []ExistingAllocation{{
+			OrderID:  "LOW-FUTURE",
+			LineID:   "A",
+			Date:     mustDate(t, "2026-05-02"),
+			Quantity: 2500,
+			Priority: domain.PriorityLow,
+		}},
+		Orders: []OrderInput{{
+			ID:       "ORD-FORCE",
+			LineID:   "A",
+			Quantity: 2500,
+			Priority: domain.PriorityHigh,
+			DueDate:  mustDate(t, "2026-05-05"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(result.Allocations) != 1 {
+		t.Fatalf("expected one allocation, got %+v", result.Allocations)
+	}
+	if !result.Allocations[0].Date.Equal(mustDate(t, "2026-05-02")) {
+		t.Fatalf("expected manual allocation after current date, got %+v", result.Allocations[0])
+	}
+	if len(result.Conflicts) != 1 || len(result.Conflicts[0].AffectedOrderIDs) != 1 || result.Conflicts[0].AffectedOrderIDs[0] != "LOW-FUTURE" {
+		t.Fatalf("expected manual conflict on future affected allocation, got %+v", result.Conflicts)
+	}
+}
+
 func TestPlanDoesNotMoveExistingHighPriorityAllocations(t *testing.T) {
 	result, err := Plan(Request{
 		LineID:         "A",
