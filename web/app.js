@@ -9,10 +9,13 @@ import {
   monthGrid,
   priorityClass,
   priorityLabel,
+  isFutureDateKey,
   sortOrdersForWorkstation,
   statusClass,
   statusCounts,
+  tomorrowDateKey,
   waterlineMetrics,
+  unacceptableDueDateMessage,
 } from "./ui.js";
 
 const statuses = ["待排程", "已排程", "生產中", "已完成", "需業務處理"];
@@ -44,6 +47,7 @@ const today = new Date();
 const due = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
 document.querySelector('input[name="startDate"]').value = tomorrowDateInputValue();
 document.querySelector('input[name="dueDate"]').value = dateInputValue(due);
+syncDueDateMinimums();
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -84,6 +88,7 @@ document.getElementById("order-form").addEventListener("submit", async (event) =
   event.preventDefault();
   try {
     const draftOrder = orderFormData();
+    assertFutureDueDate(draftOrder.dueDate);
     const result = await createPreview({
       lineId: activeLine(),
       startDate: tomorrowDateInputValue(),
@@ -294,6 +299,7 @@ document.getElementById("preview-page-list").addEventListener("click", async (ev
         showMessage("請選擇交期", "修改交期後才能重新試排。", "warn");
         return;
       }
+      assertFutureDueDate(input.value);
       await updateOrderDueDate(orderId, input.value);
       await loadOrders();
       await retryPreview({});
@@ -398,6 +404,7 @@ function renderWorkspace() {
   renderCalendar();
   renderPreviewSummary();
   renderScheduleHistory();
+  syncDueDateMinimums();
 }
 
 async function loadOrders() {
@@ -1028,7 +1035,7 @@ function renderOrderAction(order) {
       <div class="drawer-actions">
         <label>
           <span>交期</span>
-          <input data-resubmit-field="dueDate" type="date" value="${dateOnly(order.dueDate)}">
+          <input data-resubmit-field="dueDate" type="date" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
         </label>
         <label>
           <span>數量</span>
@@ -1064,6 +1071,7 @@ async function handleOrderAction(action, orderId, productionDate = "") {
       const card = document.querySelector(`[data-order-id="${cssEscape(orderId)}"]`);
       const dueDate = card?.querySelector('[data-resubmit-field="dueDate"]')?.value;
       const quantity = Number(card?.querySelector('[data-resubmit-field="quantity"]')?.value);
+      assertFutureDueDate(dueDate);
       await request("/api/orders/resubmit", {
         method: "POST",
         body: JSON.stringify({ orderId, dueDate, quantity }),
@@ -1137,7 +1145,7 @@ function renderConflictDueDateEditors(conflicts) {
         return `
           <label>
             <span>${escapeHtml(orderId)}</span>
-            <input data-conflict-due-date="${escapeHtml(orderId)}" type="date" value="${dateOnly(order.dueDate)}">
+            <input data-conflict-due-date="${escapeHtml(orderId)}" type="date" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
           </label>
           <button data-preview-action="update-conflict-due-date" data-order-id="${escapeHtml(orderId)}" type="button">更新 ${escapeHtml(orderId)} 交期並重試</button>
         `;
@@ -1364,6 +1372,19 @@ function orderFormData() {
   return data;
 }
 
+function assertFutureDueDate(dueDate) {
+  if (!isFutureDateKey(dueDate, dateInputValue(new Date()))) {
+    throw new Error(unacceptableDueDateMessage);
+  }
+}
+
+function syncDueDateMinimums() {
+  const min = tomorrowDateInputValue();
+  document.querySelectorAll('input[name="dueDate"], [data-resubmit-field="dueDate"], [data-conflict-due-date]').forEach((input) => {
+    input.min = min;
+  });
+}
+
 async function retryPreview(overrides) {
   const request = {
     ...state.preview.request,
@@ -1512,9 +1533,7 @@ function dateInputValue(value) {
 }
 
 function tomorrowDateInputValue() {
-  const tomorrow = new Date();
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  return dateInputValue(tomorrow);
+  return tomorrowDateKey(dateInputValue(new Date()));
 }
 
 function monthKey(value) {

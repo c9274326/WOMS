@@ -12,6 +12,12 @@ import (
 	"github.com/c9274326/woms/internal/domain"
 )
 
+func init() {
+	nowUTC = func() time.Time {
+		return time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+	}
+}
+
 func TestIngressAuthRejectsMissingToken(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	req := httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)
@@ -118,6 +124,66 @@ func TestOrderValidationRejectsInvalidQuantity(t *testing.T) {
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderRejectsTodayDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-04-30"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderRejectsPastDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"high","dueDate":"2026-04-29"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderAcceptsTomorrowDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-01"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected created order, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderAcceptsFutureDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"high","dueDate":"2026-05-02"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected created order, got %d body=%s", res.Code, res.Body.String())
 	}
 }
 
@@ -359,6 +425,51 @@ func TestSalesConfirmsDraftPreviewIntoPendingOrder(t *testing.T) {
 	}
 }
 
+func TestSalesDraftPreviewRejectsTodayDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-04-30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesDraftPreviewRejectsPastDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"high","dueDate":"2026-04-29"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesDraftPreviewAcceptsTomorrowDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-01"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected draft preview, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestSalesDraftPreviewDoesNotScheduleOtherPendingOrders(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
@@ -581,6 +692,40 @@ func TestSchedulerCanUpdatePendingOrderDueDate(t *testing.T) {
 	}
 }
 
+func TestUpdateOrderDueDateRejectsTodayOrPast(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+
+	for _, dueDate := range []string{"2026-04-30", "2026-04-29"} {
+		body := bytes.NewBufferString(`{"dueDate":"` + dueDate + `"}`)
+		req := httptest.NewRequest(http.MethodPatch, "/api/orders/ORD-1", body)
+		req.Header.Set("Authorization", "Bearer "+schedulerA)
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+			t.Fatalf("expected unacceptable due date rejection for %s, got %d body=%s", dueDate, res.Code, res.Body.String())
+		}
+	}
+}
+
+func TestUpdateOrderDueDateAcceptsFuture(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	body := bytes.NewBufferString(`{"dueDate":"2026-05-01"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/orders/ORD-1", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected due date update, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestOrderNoteCannotBeUpdatedAfterCreate(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer("secret", store)
@@ -758,6 +903,34 @@ func TestSchedulerRejectsPendingOrdersAndSalesCanResubmit(t *testing.T) {
 	}
 	if store.orders["ORD-1"].Quantity != 2000 || store.orders["ORD-1"].Note != "customer can accept split delivery" {
 		t.Fatalf("expected sales edits to persist, got %+v", store.orders["ORD-1"])
+	}
+}
+
+func TestSalesResubmitRejectsTodayOrPastDueDate(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	body := bytes.NewBufferString(`{"orderIds":["ORD-1"],"reason":"capacity unavailable before due date"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders/reject", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("reject failed: %d %s", res.Code, res.Body.String())
+	}
+
+	for _, dueDate := range []string{"2026-04-30", "2026-04-29"} {
+		body = bytes.NewBufferString(`{"orderId":"ORD-1","dueDate":"` + dueDate + `","quantity":2000}`)
+		req = httptest.NewRequest(http.MethodPost, "/api/orders/resubmit", body)
+		req.Header.Set("Authorization", "Bearer "+salesToken)
+		res = httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+			t.Fatalf("expected unacceptable due date rejection for %s, got %d body=%s", dueDate, res.Code, res.Body.String())
+		}
 	}
 }
 

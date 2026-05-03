@@ -7,6 +7,7 @@ import {
   escapeHtml,
   exactFilterOrders,
   groupAllocationsByDate,
+  isFutureDateKey,
   lineScopedOrders,
   matchesOrder,
   monthGrid,
@@ -14,7 +15,9 @@ import {
   sortOrdersForWorkstation,
   statusClass,
   statusCounts,
+  tomorrowDateKey,
   uniqueValues,
+  unacceptableDueDateMessage,
   waterlineMetrics,
 } from "./ui.js";
 
@@ -152,6 +155,14 @@ test("groupAllocationsByDate groups calendar allocations by ISO date", () => {
   ]);
   assert.deepEqual(groups["2026-05-02"].map((item) => item.orderId), ["ORD-1", "ORD-2"]);
   assert.deepEqual(groups["2026-05-03"].map((item) => item.orderId), ["ORD-3"]);
+});
+
+test("sales due date helpers allow only tomorrow or later", () => {
+  assert.equal(isFutureDateKey("2026-04-29", "2026-04-30"), false);
+  assert.equal(isFutureDateKey("2026-04-30", "2026-04-30"), false);
+  assert.equal(isFutureDateKey("2026-05-01", "2026-04-30"), true);
+  assert.equal(tomorrowDateKey("2026-04-30"), "2026-05-01");
+  assert.equal(unacceptableDueDateMessage, "無法被接受的交期");
 });
 
 test("waterlineMetrics summarizes daily capacity usage", () => {

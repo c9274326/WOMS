@@ -176,7 +176,7 @@ Submit jobs for different lines:
 - As a scheduler, create a conflict, select conflicted orders plus movable low-priority scheduled orders in the conflict panel, preview the earliest-completion solution, accept it, and confirm the moved orders' old open allocations are replaced.
 - As a scheduler, click a scheduled calendar order to start production, then click the in-progress calendar allocation for the intended production date to open production reporting.
 - Submit a partial production quantity and confirm the calendar keeps that date's completed quantity while the same order ID returns to pending scheduling with the remaining quantity.
-- Create a sales draft order preview, confirm the preview page highlights calendar results, then confirm it into pending orders.
+- Create a sales draft order preview with a future due date, confirm the preview page highlights calendar results, then confirm it into pending orders. Also confirm today and past due dates are blocked with `無法被接受的交期`.
 - As a scheduler, select pending orders, preview first, then confirm execution from the preview page. A direct schedule job API call without `previewId` must fail.
 - Delete selected pending/scheduled orders and confirm removed scheduled allocations disappear from the calendar.
 - Use the conflict demo button, preview the generated same-day orders, and confirm the conflict panel fills the right side of the preview dialog without clipping the solution controls.
