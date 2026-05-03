@@ -4,6 +4,7 @@ import {
   defaultLine,
   conflictExplanation,
   customerFilterValues,
+  dateKeyInTimeZone,
   escapeHtml,
   exactFilterOrders,
   groupAllocationsByDate,
@@ -163,6 +164,12 @@ test("sales due date helpers allow only tomorrow or later", () => {
   assert.equal(isFutureDateKey("2026-05-01", "2026-04-30"), true);
   assert.equal(tomorrowDateKey("2026-04-30"), "2026-05-01");
   assert.equal(unacceptableDueDateMessage, "無法被接受的交期");
+});
+
+test("dateKeyInTimeZone returns the plant-local calendar date", () => {
+  const now = new Date("2026-05-04T16:30:00Z");
+  assert.equal(dateKeyInTimeZone(now, "Asia/Taipei"), "2026-05-05");
+  assert.equal(dateKeyInTimeZone(now, "America/New_York"), "2026-05-04");
 });
 
 test("waterlineMetrics summarizes daily capacity usage", () => {

@@ -17,6 +17,7 @@ import (
 
 const dateLayout = "2006-01-02"
 const unacceptableDueDateMessage = "無法被接受的交期"
+const defaultLineTimezone = "Asia/Taipei"
 
 var nowUTC = func() time.Time {
 	return time.Now().UTC()
@@ -52,6 +53,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleIngressAuth(w, r)
 	case r.URL.Path == "/api/orders":
 		s.handleOrders(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/lines":
+		s.handleLines(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/preview-confirm":
 		s.handleConfirmPreviewOrder(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/reject":
@@ -163,6 +166,14 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) handleLines(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.claimsFromRequest(r); err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lines": s.store.ListLines()})
 }
 
 func (s *Server) handleConfirmPreviewOrder(w http.ResponseWriter, r *http.Request) {
@@ -436,10 +447,10 @@ func NewMemoryStore() *MemoryStore {
 		nextAuditID:   1,
 		nextPreviewID: 1,
 		lines: map[string]domain.ProductionLine{
-			"A": {ID: "A", Name: "Line A", CapacityPerDay: 10000},
-			"B": {ID: "B", Name: "Line B", CapacityPerDay: 10000},
-			"C": {ID: "C", Name: "Line C", CapacityPerDay: 10000},
-			"D": {ID: "D", Name: "Line D", CapacityPerDay: 10000},
+			"A": {ID: "A", Name: "Line A", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
+			"B": {ID: "B", Name: "Line B", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
+			"C": {ID: "C", Name: "Line C", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
+			"D": {ID: "D", Name: "Line D", CapacityPerDay: 10000, Timezone: defaultLineTimezone},
 		},
 		users: map[string]domain.User{
 			"admin":       {ID: "user-admin", Username: "admin", PasswordHash: "demo", Role: domain.RoleAdmin},
@@ -532,6 +543,7 @@ type previewRecord struct {
 
 type schedulePreviewResponse struct {
 	PreviewID   string                 `json:"previewId"`
+	CurrentDate string                 `json:"currentDate"`
 	Allocations []scheduler.Allocation `json:"allocations"`
 	Conflicts   []scheduler.Conflict   `json:"conflicts"`
 	FinishDate  time.Time              `json:"finishDate"`
@@ -588,7 +600,11 @@ func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, clai
 		return domain.Order{}, errors.New("note cannot be updated after order creation")
 	}
 	if req.DueDate != "" {
-		dueDate, err := validateFutureDueDate(req.DueDate, truncateDate(now))
+		currentDate, err := s.currentDateForLineLocked(order.LineID, now)
+		if err != nil {
+			return domain.Order{}, err
+		}
+		dueDate, err := validateFutureDueDate(req.DueDate, currentDate)
 		if err != nil {
 			return domain.Order{}, err
 		}
@@ -608,7 +624,11 @@ func (s *MemoryStore) UpdateOrderDueDate(id string, req updateOrderRequest, clai
 
 func (s *MemoryStore) createOrderLocked(req createOrderRequest, actorID string) (domain.Order, error) {
 	now := nowUTC()
-	dueDate, err := validateOrderRequest(req, s.lines, truncateDate(now))
+	currentDate, err := s.currentDateForLineLocked(req.LineID, now)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	dueDate, err := validateOrderRequest(req, s.lines, currentDate)
 	if err != nil {
 		return domain.Order{}, err
 	}
@@ -697,7 +717,11 @@ func (s *MemoryStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Claims
 		order.Quantity = req.Quantity
 	}
 	if req.DueDate != "" {
-		dueDate, err := validateFutureDueDate(req.DueDate, truncateDate(now))
+		currentDate, err := s.currentDateForLineLocked(order.LineID, now)
+		if err != nil {
+			return domain.Order{}, err
+		}
+		dueDate, err := validateFutureDueDate(req.DueDate, currentDate)
 		if err != nil {
 			return domain.Order{}, err
 		}
@@ -781,6 +805,20 @@ func (s *MemoryStore) ListUsers() []domain.User {
 	return users
 }
 
+func (s *MemoryStore) ListLines() []domain.ProductionLine {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lines := make([]domain.ProductionLine, 0, len(s.lines))
+	for _, line := range s.lines {
+		lines = append(lines, line)
+	}
+	sort.Slice(lines, func(i, j int) bool {
+		return lines[i].ID < lines[j].ID
+	})
+	return lines
+}
+
 func (s *MemoryStore) AssignUser(req assignUserRequest, actorID string) (domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -823,7 +861,11 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := nowUTC()
-	req = defaultScheduleCurrentDate(req, now)
+	var err error
+	req, err = s.defaultScheduleCurrentDateLocked(req, claims, now)
+	if err != nil {
+		return schedulePreviewResponse{}, err
+	}
 	result, err := s.planLocked(req, claims)
 	if err != nil {
 		return schedulePreviewResponse{}, err
@@ -839,6 +881,7 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 	}
 	return schedulePreviewResponse{
 		PreviewID:   id,
+		CurrentDate: req.CurrentDate,
 		Allocations: result.Allocations,
 		Conflicts:   result.Conflicts,
 		FinishDate:  result.FinishDate,
@@ -850,7 +893,11 @@ func (s *MemoryStore) CreateScheduleJob(req scheduleRequest, claims auth.Claims)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := nowUTC()
-	req = defaultScheduleCurrentDate(req, now)
+	var err error
+	req, err = s.defaultScheduleCurrentDateLocked(req, claims, now)
+	if err != nil {
+		return domain.ScheduleJob{}, err
+	}
 
 	if req.PreviewID == "" {
 		return domain.ScheduleJob{}, errors.New("previewId is required before creating a schedule job")
@@ -932,6 +979,7 @@ type calendarAllocation struct {
 
 type calendarResponse struct {
 	LineID      string               `json:"lineId"`
+	Timezone    string               `json:"timezone"`
 	Month       string               `json:"month"`
 	Allocations []calendarAllocation `json:"allocations"`
 }
@@ -949,11 +997,16 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 	if claims.Role == domain.RoleScheduler && claims.LineID != lineID {
 		return calendarResponse{}, errors.New("cannot access another production line")
 	}
-	if _, ok := s.lines[lineID]; !ok {
+	line, ok := s.lines[lineID]
+	if !ok {
 		return calendarResponse{}, errors.New("production line does not exist")
 	}
 	if month == "" {
-		month = time.Now().UTC().Format("2006-01")
+		currentDate, err := currentDateInLineTimezone(line, nowUTC())
+		if err != nil {
+			return calendarResponse{}, err
+		}
+		month = currentDate.Format("2006-01")
 	}
 	monthStart, err := time.Parse("2006-01", month)
 	if err != nil {
@@ -995,7 +1048,7 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 		return allocations[i].OrderID < allocations[j].OrderID
 	})
 
-	return calendarResponse{LineID: lineID, Month: month, Allocations: allocations}, nil
+	return calendarResponse{LineID: lineID, Timezone: line.Timezone, Month: month, Allocations: allocations}, nil
 }
 
 func (s *MemoryStore) ScheduleHistory(lineID string, claims auth.Claims) ([]domain.AuditEntry, error) {
@@ -1185,14 +1238,6 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 	if !ok {
 		return scheduler.Result{}, errors.New("production line does not exist")
 	}
-	startDate := nowUTC()
-	if req.StartDate != "" {
-		parsed, err := time.Parse(dateLayout, req.StartDate)
-		if err != nil {
-			return scheduler.Result{}, errors.New("startDate must use YYYY-MM-DD")
-		}
-		startDate = parsed
-	}
 	currentDate := time.Time{}
 	if req.CurrentDate != "" {
 		parsed, err := time.Parse(dateLayout, req.CurrentDate)
@@ -1200,6 +1245,21 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 			return scheduler.Result{}, errors.New("currentDate must use YYYY-MM-DD")
 		}
 		currentDate = parsed
+	}
+	startDate := currentDate
+	if startDate.IsZero() {
+		lineCurrentDate, err := currentDateInLineTimezone(line, nowUTC())
+		if err != nil {
+			return scheduler.Result{}, err
+		}
+		startDate = lineCurrentDate
+	}
+	if req.StartDate != "" {
+		parsed, err := time.Parse(dateLayout, req.StartDate)
+		if err != nil {
+			return scheduler.Result{}, errors.New("startDate must use YYYY-MM-DD")
+		}
+		startDate = parsed
 	}
 
 	selected := map[string]bool{}
@@ -1383,7 +1443,11 @@ func (s *MemoryStore) CreateDemoConflictOrders(req demoConflictRequest, claims a
 		return nil, errors.New("count must be between 5 and 20")
 	}
 	if req.DueDate == "" {
-		req.DueDate = nowUTC().AddDate(0, 0, 1).Format(dateLayout)
+		currentDate, err := s.currentDateForLineLocked(lineID, nowUTC())
+		if err != nil {
+			return nil, err
+		}
+		req.DueDate = currentDate.AddDate(0, 0, 1).Format(dateLayout)
 	}
 
 	orders := make([]domain.Order, 0, req.Count)
@@ -1588,6 +1652,56 @@ func defaultScheduleCurrentDate(req scheduleRequest, now time.Time) scheduleRequ
 		req.CurrentDate = truncateDate(now).Format(dateLayout)
 	}
 	return req
+}
+
+func (s *MemoryStore) defaultScheduleCurrentDateLocked(req scheduleRequest, claims auth.Claims, now time.Time) (scheduleRequest, error) {
+	if req.CurrentDate != "" {
+		return req, nil
+	}
+	lineID := scheduleRequestLineID(req, claims)
+	if lineID == "" {
+		return req, nil
+	}
+	currentDate, err := s.currentDateForLineLocked(lineID, now)
+	if err != nil {
+		return scheduleRequest{}, err
+	}
+	req.CurrentDate = currentDate.Format(dateLayout)
+	return req, nil
+}
+
+func scheduleRequestLineID(req scheduleRequest, claims auth.Claims) string {
+	if req.LineID != "" {
+		return req.LineID
+	}
+	if claims.Role == domain.RoleScheduler && claims.LineID != "" {
+		return claims.LineID
+	}
+	if req.DraftOrder != nil {
+		return req.DraftOrder.LineID
+	}
+	return ""
+}
+
+func (s *MemoryStore) currentDateForLineLocked(lineID string, now time.Time) (time.Time, error) {
+	line, ok := s.lines[lineID]
+	if !ok {
+		return time.Time{}, errors.New("production line does not exist")
+	}
+	return currentDateInLineTimezone(line, now)
+}
+
+func currentDateInLineTimezone(line domain.ProductionLine, now time.Time) (time.Time, error) {
+	timezone := strings.TrimSpace(line.Timezone)
+	if timezone == "" {
+		timezone = defaultLineTimezone
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.Time{}, errors.New("production line timezone is invalid")
+	}
+	year, month, day := now.In(location).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
 }
 
 func sameScheduleRequest(a, b scheduleRequest) bool {

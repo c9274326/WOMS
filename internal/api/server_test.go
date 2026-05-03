@@ -85,6 +85,49 @@ func TestDefaultScheduleCurrentDateUsesServerDayWhenMissing(t *testing.T) {
 	}
 }
 
+func TestLineTimezoneCurrentDateUsesPlantLocalDay(t *testing.T) {
+	now := time.Date(2026, 5, 4, 16, 30, 0, 0, time.UTC)
+
+	taipei, err := currentDateInLineTimezone(domain.ProductionLine{ID: "A", Timezone: "Asia/Taipei"}, now)
+	if err != nil {
+		t.Fatalf("taipei current date failed: %v", err)
+	}
+	newYork, err := currentDateInLineTimezone(domain.ProductionLine{ID: "B", Timezone: "America/New_York"}, now)
+	if err != nil {
+		t.Fatalf("new york current date failed: %v", err)
+	}
+
+	if taipei.Format(dateLayout) != "2026-05-05" {
+		t.Fatalf("expected Asia/Taipei today to be 2026-05-05, got %s", taipei.Format(dateLayout))
+	}
+	if newYork.Format(dateLayout) != "2026-05-04" {
+		t.Fatalf("expected America/New_York today to be 2026-05-04, got %s", newYork.Format(dateLayout))
+	}
+}
+
+func TestLinesAPIIncludesTimezone(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	req := httptest.NewRequest(http.MethodGet, "/api/lines", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Lines []domain.ProductionLine `json:"lines"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode lines response: %v", err)
+	}
+	if len(payload.Lines) == 0 || payload.Lines[0].Timezone == "" {
+		t.Fatalf("expected line timezone in response, got %+v", payload.Lines)
+	}
+}
+
 func TestOnlyAdminCanAssignUsers(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
@@ -169,6 +212,39 @@ func TestSalesCreateOrderAcceptsTomorrowDueDate(t *testing.T) {
 
 	if res.Code != http.StatusCreated {
 		t.Fatalf("expected created order, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderUsesLineTimezoneForDueDateValidation(t *testing.T) {
+	originalNow := nowUTC
+	nowUTC = func() time.Time {
+		return time.Date(2026, 5, 4, 16, 30, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() {
+		nowUTC = originalNow
+	})
+	store := NewMemoryStore()
+	store.lines["A"] = domain.ProductionLine{ID: "A", Name: "Line A", CapacityPerDay: 10000, Timezone: "Asia/Taipei"}
+	store.lines["B"] = domain.ProductionLine{ID: "B", Name: "Line B", CapacityPerDay: 10000, Timezone: "America/New_York"}
+	server := NewServer("secret", store)
+	token := login(t, server, "sales", "demo")
+
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-05"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected Taipei line to reject local-today due date, got %d body=%s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"customer":"ACME","lineId":"B","quantity":2500,"priority":"low","dueDate":"2026-05-05"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected New York line to accept local-tomorrow due date, got %d body=%s", res.Code, res.Body.String())
 	}
 }
 
@@ -375,6 +451,46 @@ func TestSchedulePreviewRespectsRequestedFutureStart(t *testing.T) {
 	}
 	if payload.Allocations[0].Date.Format(dateLayout) != "2026-05-01" || payload.Allocations[0].Quantity != 2500 {
 		t.Fatalf("expected full allocation on 2026-05-01, got %+v", payload.Allocations[0])
+	}
+}
+
+func TestSchedulePreviewDefaultsCurrentDateFromLineTimezone(t *testing.T) {
+	originalNow := nowUTC
+	nowUTC = func() time.Time {
+		return time.Date(2026, 5, 4, 16, 30, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() {
+		nowUTC = originalNow
+	})
+	store := NewMemoryStore()
+	store.lines["B"] = domain.ProductionLine{ID: "B", Name: "Line B", CapacityPerDay: 10000, Timezone: "America/New_York"}
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrderWithPriorityAndDue(t, server, salesToken, "B", "low", "2026-05-06")
+
+	schedulerB := login(t, server, "scheduler-b", "demo")
+	body := bytes.NewBufferString(`{"lineId":"B","startDate":"2026-05-04","orderIds":["ORD-1"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerB)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		CurrentDate string `json:"currentDate"`
+		Allocations []struct {
+			Date time.Time `json:"date"`
+		} `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if payload.CurrentDate != "2026-05-04" {
+		t.Fatalf("expected New York current date, got %q", payload.CurrentDate)
+	}
+	if len(payload.Allocations) != 1 || payload.Allocations[0].Date.Format(dateLayout) != "2026-05-05" {
+		t.Fatalf("expected start after New York current date, got %+v", payload.Allocations)
 	}
 }
 

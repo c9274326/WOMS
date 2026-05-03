@@ -1,7 +1,9 @@
 import {
   conflictExplanation,
   customerFilterValues,
+  dateKeyInTimeZone,
   defaultLine,
+  defaultTimezone,
   escapeHtml,
   exactFilterOrders,
   groupAllocationsByDate,
@@ -19,12 +21,18 @@ import {
 } from "./ui.js";
 
 const statuses = ["待排程", "已排程", "生產中", "已完成", "需業務處理"];
-const lines = ["A", "B", "C", "D"];
+const fallbackLines = ["A", "B", "C", "D"].map((id) => ({
+  id,
+  name: `Line ${id}`,
+  capacityPerDay: 10000,
+  timezone: defaultTimezone,
+}));
 const priorities = ["low", "high"];
 
 const state = {
   token: localStorage.getItem("woms.token") ?? "",
   user: JSON.parse(localStorage.getItem("woms.user") ?? "null"),
+  lines: fallbackLines,
   users: [],
   orders: [],
   calendarAllocations: [],
@@ -34,19 +42,17 @@ const state = {
   rejectOrderIds: [],
   selectedOrderIds: new Set(),
   mobileView: "orders",
-  selectedLine: localStorage.getItem("woms.selectedLine") || defaultLine(lines),
+  selectedLine: localStorage.getItem("woms.selectedLine") || defaultLine(fallbackLines),
   filters: {
     customers: new Set(),
     status: "",
     priorities: new Set(),
   },
-  calendarDate: new Date(),
+  calendarDate: calendarDateFromDateKey(dateKeyInTimeZone(new Date(), defaultTimezone)),
 };
 
-const today = new Date();
-const due = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
 document.querySelector('input[name="startDate"]').value = tomorrowDateInputValue();
-document.querySelector('input[name="dueDate"]').value = dateInputValue(due);
+document.querySelector('input[name="dueDate"]').value = addDaysToDateKey(todayDateInputValue(), 3);
 syncDueDateMinimums();
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
@@ -79,6 +85,7 @@ document.getElementById("active-line-select").addEventListener("change", async (
   state.selectedOrderIds.clear();
   state.filters.customers.clear();
   syncLineInputs();
+  syncDateDefaults();
   renderWorkspace();
   await loadCalendar();
   await loadScheduleHistory();
@@ -358,17 +365,17 @@ document.getElementById("preview-page-list").addEventListener("click", async (ev
 });
 
 document.getElementById("prev-month").addEventListener("click", async () => {
-  state.calendarDate.setMonth(state.calendarDate.getMonth() - 1);
+  state.calendarDate.setUTCMonth(state.calendarDate.getUTCMonth() - 1);
   await loadCalendar();
 });
 
 document.getElementById("next-month").addEventListener("click", async () => {
-  state.calendarDate.setMonth(state.calendarDate.getMonth() + 1);
+  state.calendarDate.setUTCMonth(state.calendarDate.getUTCMonth() + 1);
   await loadCalendar();
 });
 
 document.getElementById("today-month").addEventListener("click", async () => {
-  state.calendarDate = new Date();
+  state.calendarDate = calendarDateFromDateKey(todayDateInputValue());
   await loadCalendar();
 });
 
@@ -385,6 +392,7 @@ if (state.token) {
 }
 
 async function refreshWorkspace() {
+  await loadLines();
   await loadOrders();
   await loadCalendar();
   await loadScheduleHistory();
@@ -423,6 +431,19 @@ async function loadUsers() {
   renderUsers();
 }
 
+async function loadLines() {
+  if (!state.token) {
+    state.lines = fallbackLines;
+    renderLineOptions();
+    return;
+  }
+  const payload = await request("/api/lines");
+  state.lines = payload.lines?.length ? payload.lines : fallbackLines;
+  configureLineForUser();
+  renderLineOptions();
+  syncDateDefaults();
+}
+
 async function loadCalendar() {
   if (!state.token) {
     state.calendarAllocations = [];
@@ -451,7 +472,7 @@ async function loadScheduleHistory() {
 async function createPreview(requestData, kind) {
   const payloadData = {
     ...requestData,
-    currentDate: requestData.currentDate ?? dateInputValue(new Date()),
+    currentDate: requestData.currentDate ?? todayDateInputValue(),
   };
   const result = await request("/api/schedules/preview", {
     method: "POST",
@@ -463,7 +484,7 @@ async function createPreview(requestData, kind) {
     request: {
       lineId: payloadData.lineId,
       startDate: payloadData.startDate,
-      currentDate: payloadData.currentDate,
+      currentDate: result.currentDate ?? payloadData.currentDate,
       orderIds: payloadData.orderIds ?? [],
       resolutionOrderIds: payloadData.resolutionOrderIds ?? [],
       manualForce: payloadData.manualForce === "on" || payloadData.manualForce === true,
@@ -507,6 +528,21 @@ function renderUsers() {
   select.innerHTML = state.users.map((user) => `
     <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${escapeHtml(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""})</option>
   `).join("");
+}
+
+function renderLineOptions() {
+  const activeSelect = document.getElementById("active-line-select");
+  const options = state.lines.map((line) => `
+    <option value="${escapeHtml(line.id)}">${escapeHtml(line.id)} · ${escapeHtml(line.timezone ?? defaultTimezone)}</option>
+  `).join("");
+  activeSelect.innerHTML = options;
+  document.getElementById("assign-line").innerHTML = `
+    <option value="">無</option>
+    ${state.lines.map((line) => `
+    <option value="${escapeHtml(line.id)}">${escapeHtml(line.id)} · ${escapeHtml(line.timezone ?? defaultTimezone)}</option>
+  `).join("")}
+  `;
+  activeSelect.value = activeLine();
 }
 
 function renderOrders() {
@@ -705,8 +741,8 @@ function renderStatusSidebar() {
 }
 
 function renderCalendar() {
-  const year = state.calendarDate.getFullYear();
-  const monthIndex = state.calendarDate.getMonth();
+  const year = state.calendarDate.getUTCFullYear();
+  const monthIndex = state.calendarDate.getUTCMonth();
   document.getElementById("calendar-title").textContent = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
 
   const previewAllocations = state.preview?.allocations?.map((allocation) => ({ ...allocation, preview: true })) ?? [];
@@ -899,7 +935,7 @@ function renderConflictActions(conflicts, manualForce) {
   if (state.preview?.kind !== "schedule" || conflicts.length === 0) {
     return "";
   }
-  const startDate = state.preview.request.startDate || new Date().toISOString().slice(0, 10);
+  const startDate = state.preview.request.startDate || todayDateInputValue();
   return `
     <div class="conflict-actions">
       <h3>衝突修改</h3>
@@ -1252,7 +1288,7 @@ function suggestedStartDate(preview) {
   const daysNeeded = Math.max(1, Math.ceil(total / 10000));
   earliestDue.setUTCDate(earliestDue.getUTCDate() - daysNeeded + 1);
   const suggested = dateInputValue(earliestDue);
-  const todayValue = dateInputValue(new Date());
+  const todayValue = todayDateInputValue();
   return suggested <= todayValue ? tomorrowDateInputValue() : suggested;
 }
 
@@ -1355,7 +1391,7 @@ async function submitRejectOrders() {
 function scheduleFormData() {
   const data = Object.fromEntries(new FormData(document.getElementById("schedule-form")));
   data.lineId = activeLine();
-  data.currentDate = dateInputValue(new Date());
+  data.currentDate = todayDateInputValue();
   data.startDate = tomorrowDateInputValue();
   data.manualForce = data.manualForce === "on";
   data.allowLateCompletion = false;
@@ -1373,7 +1409,7 @@ function orderFormData() {
 }
 
 function assertFutureDueDate(dueDate) {
-  if (!isFutureDateKey(dueDate, dateInputValue(new Date()))) {
+  if (!isFutureDateKey(dueDate, todayDateInputValue())) {
     throw new Error(unacceptableDueDateMessage);
   }
 }
@@ -1421,7 +1457,7 @@ function saveSession(token, user) {
   state.token = token;
   state.user = user;
   if (user.role !== "scheduler") {
-    state.selectedLine = defaultLine(lines);
+    state.selectedLine = defaultLine(state.lines);
     localStorage.setItem("woms.selectedLine", state.selectedLine);
   }
   localStorage.setItem("woms.token", token);
@@ -1432,6 +1468,7 @@ function saveSession(token, user) {
 function clearSession() {
   state.token = "";
   state.user = null;
+  state.lines = fallbackLines;
   state.orders = [];
   state.calendarAllocations = [];
   state.preview = null;
@@ -1466,13 +1503,14 @@ function configureLineForUser() {
   if (state.user?.role === "sales" && !state.filters.status) {
     state.filters.status = "待排程";
   }
-  if (!lines.includes(state.selectedLine)) {
-    state.selectedLine = defaultLine(lines);
+  if (!lineIds().includes(state.selectedLine)) {
+    state.selectedLine = defaultLine(state.lines);
   }
   syncLineInputs();
 }
 
 function syncLineInputs() {
+  renderLineOptions();
   const line = activeLine();
   const activeSelect = document.getElementById("active-line-select");
   activeSelect.value = line;
@@ -1480,11 +1518,31 @@ function syncLineInputs() {
   document.querySelector('#schedule-form input[name="lineId"]').value = line;
 }
 
+function syncDateDefaults() {
+  const start = document.querySelector('input[name="startDate"]');
+  const due = document.querySelector('input[name="dueDate"]');
+  if (start) {
+    start.value = tomorrowDateInputValue();
+  }
+  if (due && !isFutureDateKey(due.value, todayDateInputValue())) {
+    due.value = addDaysToDateKey(todayDateInputValue(), 3);
+  }
+  syncDueDateMinimums();
+}
+
 function activeLine() {
   if (state.user?.role === "scheduler" && state.user.lineId) {
     return state.user.lineId;
   }
-  return state.selectedLine || defaultLine(lines);
+  return state.selectedLine || defaultLine(state.lines);
+}
+
+function lineIds() {
+  return state.lines.map((line) => line.id);
+}
+
+function activeLineTimezone() {
+  return state.lines.find((line) => line.id === activeLine())?.timezone || defaultTimezone;
 }
 
 function visibleLineOrders() {
@@ -1501,7 +1559,7 @@ function allConflictAcknowledgementsChecked() {
 }
 
 function canScheduleOnDate(dateKey) {
-  return state.user?.role === "scheduler" && dateKey > dateInputValue(new Date());
+  return state.user?.role === "scheduler" && dateKey > todayDateInputValue();
 }
 
 function conflictsCanBeManuallyForced(conflicts) {
@@ -1532,10 +1590,24 @@ function dateInputValue(value) {
   return new Date(value).toISOString().slice(0, 10);
 }
 
+function todayDateInputValue() {
+  return dateKeyInTimeZone(new Date(), activeLineTimezone());
+}
+
 function tomorrowDateInputValue() {
-  return tomorrowDateKey(dateInputValue(new Date()));
+  return tomorrowDateKey(todayDateInputValue());
+}
+
+function addDaysToDateKey(dateKey, days) {
+  const date = new Date(`${dateKey}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function calendarDateFromDateKey(dateKey) {
+  return new Date(`${dateKey}T00:00:00Z`);
 }
 
 function monthKey(value) {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}`;
 }

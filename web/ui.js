@@ -40,7 +40,7 @@ export function sortOrdersForWorkstation(orders) {
 }
 
 export function defaultLine(lines) {
-  return [...lines].sort()[0] ?? "";
+  return [...lines].map((line) => typeof line === "string" ? line : line.id).sort()[0] ?? "";
 }
 
 export function lineScopedOrders(orders, lineId) {
@@ -124,9 +124,29 @@ export function groupAllocationsByDate(allocations) {
 }
 
 export const unacceptableDueDateMessage = "無法被接受的交期";
+export const defaultTimezone = "Asia/Taipei";
 
 export function isFutureDateKey(dateKey, todayKey) {
 	return Boolean(dateKey) && dateKey > todayKey;
+}
+
+export function dateKeyInTimeZone(value = new Date(), timezone = defaultTimezone) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone || defaultTimezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
 }
 
 export function tomorrowDateKey(todayKey) {
