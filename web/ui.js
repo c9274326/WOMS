@@ -115,34 +115,24 @@ export function monthGrid(year, monthIndex) {
 }
 
 export function groupAllocationsByDate(allocations) {
-  return allocations.reduce((groups, allocation) => {
+	return allocations.reduce((groups, allocation) => {
     const key = new Date(allocation.date).toISOString().slice(0, 10);
     groups[key] = groups[key] ?? [];
     groups[key].push(allocation);
     return groups;
-  }, {});
+	}, {});
 }
 
 export const unacceptableDueDateMessage = "無法被接受的交期";
 
 export function isFutureDateKey(dateKey, todayKey) {
-  return Boolean(dateKey) && dateKey > todayKey;
-}
-
-export function canDropPendingOrderOnDate({ role, dateKey, todayKey }) {
-  return role === "scheduler" && isFutureDateKey(dateKey, todayKey);
-}
-
-export function shouldPreviewDroppedOrders({ orderIds, role, dateKey, todayKey }) {
-  return Array.isArray(orderIds)
-    && orderIds.length > 0
-    && canDropPendingOrderOnDate({ role, dateKey, todayKey });
+	return Boolean(dateKey) && dateKey > todayKey;
 }
 
 export function tomorrowDateKey(todayKey) {
-  const tomorrow = new Date(`${todayKey}T00:00:00Z`);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  return tomorrow.toISOString().slice(0, 10);
+	const tomorrow = new Date(`${todayKey}T00:00:00Z`);
+	tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+	return tomorrow.toISOString().slice(0, 10);
 }
 
 export function statusClass(status) {

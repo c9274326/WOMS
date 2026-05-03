@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  canDropPendingOrderOnDate,
   defaultLine,
   conflictExplanation,
   customerFilterValues,
@@ -14,7 +13,6 @@ import {
   monthGrid,
   priorityLabel,
   sortOrdersForWorkstation,
-  shouldPreviewDroppedOrders,
   statusClass,
   statusCounts,
   tomorrowDateKey,
@@ -165,25 +163,6 @@ test("sales due date helpers allow only tomorrow or later", () => {
   assert.equal(isFutureDateKey("2026-05-01", "2026-04-30"), true);
   assert.equal(tomorrowDateKey("2026-04-30"), "2026-05-01");
   assert.equal(unacceptableDueDateMessage, "無法被接受的交期");
-});
-
-test("scheduler calendar drop accepts only tomorrow or later", () => {
-  const todayKey = "2026-04-30";
-  assert.equal(canDropPendingOrderOnDate({ role: "scheduler", dateKey: "2026-04-29", todayKey }), false);
-  assert.equal(canDropPendingOrderOnDate({ role: "scheduler", dateKey: "2026-04-30", todayKey }), false);
-  assert.equal(canDropPendingOrderOnDate({ role: "scheduler", dateKey: "2026-05-01", todayKey }), true);
-  assert.equal(canDropPendingOrderOnDate({ role: "scheduler", dateKey: "2026-05-02", todayKey }), true);
-  assert.equal(canDropPendingOrderOnDate({ role: "sales", dateKey: "2026-05-01", todayKey }), false);
-});
-
-test("drop preview is skipped for today and past calendar dates", () => {
-  const todayKey = "2026-04-30";
-  const orderIds = ["ORD-1"];
-  assert.equal(shouldPreviewDroppedOrders({ orderIds, role: "scheduler", dateKey: "2026-04-29", todayKey }), false);
-  assert.equal(shouldPreviewDroppedOrders({ orderIds, role: "scheduler", dateKey: "2026-04-30", todayKey }), false);
-  assert.equal(shouldPreviewDroppedOrders({ orderIds, role: "scheduler", dateKey: "2026-05-01", todayKey }), true);
-  assert.equal(shouldPreviewDroppedOrders({ orderIds, role: "scheduler", dateKey: "2026-05-02", todayKey }), true);
-  assert.equal(shouldPreviewDroppedOrders({ orderIds: [], role: "scheduler", dateKey: "2026-05-01", todayKey }), false);
 });
 
 test("waterlineMetrics summarizes daily capacity usage", () => {
