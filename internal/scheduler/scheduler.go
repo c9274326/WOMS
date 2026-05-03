@@ -241,9 +241,9 @@ func scheduleStartDate(requested, current time.Time) time.Time {
 	if current.IsZero() {
 		return start
 	}
-	today := truncateDate(current)
-	if start.Before(today) {
-		return today
+	earliest := truncateDate(current).AddDate(0, 0, 1)
+	if start.Before(earliest) {
+		return earliest
 	}
 	return start
 }

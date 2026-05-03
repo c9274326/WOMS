@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS production_lines (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    capacity_per_day INTEGER NOT NULL CHECK (capacity_per_day > 0)
+    capacity_per_day INTEGER NOT NULL CHECK (capacity_per_day > 0),
+    timezone TEXT NOT NULL DEFAULT 'Asia/Taipei'
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -18,7 +19,7 @@ CREATE TABLE IF NOT EXISTS orders (
     line_id TEXT NOT NULL REFERENCES production_lines(id),
     quantity INTEGER NOT NULL CHECK (quantity BETWEEN 25 AND 2500),
     priority TEXT NOT NULL CHECK (priority IN ('low', 'high')),
-    status TEXT NOT NULL CHECK (status IN ('待排程', '已排程', '生產中', '已完成')),
+    status TEXT NOT NULL CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理')),
     due_date DATE NOT NULL,
     created_by TEXT NOT NULL REFERENCES users(id),
     source_order TEXT REFERENCES orders(id),
@@ -43,7 +44,7 @@ CREATE TABLE IF NOT EXISTS schedule_allocations (
     quantity INTEGER NOT NULL CHECK (quantity > 0),
     priority TEXT NOT NULL CHECK (priority IN ('low', 'high')),
     locked BOOLEAN NOT NULL DEFAULT FALSE,
-    status TEXT CHECK (status IN ('待排程', '已排程', '生產中', '已完成'))
+    status TEXT CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -55,10 +56,10 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TIMESTAMPTZ NOT NULL
 );
 
-INSERT INTO production_lines (id, name, capacity_per_day)
+INSERT INTO production_lines (id, name, capacity_per_day, timezone)
 VALUES
-    ('A', 'Line A', 10000),
-    ('B', 'Line B', 10000),
-    ('C', 'Line C', 10000),
-    ('D', 'Line D', 10000)
+    ('A', 'Line A', 10000, 'Asia/Taipei'),
+    ('B', 'Line B', 10000, 'Asia/Taipei'),
+    ('C', 'Line C', 10000, 'Asia/Taipei'),
+    ('D', 'Line D', 10000, 'Europe/London')
 ON CONFLICT (id) DO NOTHING;
