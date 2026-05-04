@@ -39,6 +39,7 @@ type ProductionLine struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
 	CapacityPerDay   int    `json:"capacityPerDay"`
+	Timezone         string `json:"timezone"`
 	ScheduleRevision int64  `json:"scheduleRevision"`
 }
 

@@ -75,6 +75,26 @@ func (s *PostgresStore) ListUsers() []domain.User {
 	return users
 }
 
+func (s *PostgresStore) ListLines() []domain.ProductionLine {
+	rows, err := s.db.Query(`
+		SELECT id, name, capacity_per_day, COALESCE(timezone, $1), schedule_revision
+		FROM production_lines
+		ORDER BY id
+	`, defaultLineTimezone)
+	if err != nil {
+		return s.MemoryStore.ListLines()
+	}
+	defer rows.Close()
+	lines := []domain.ProductionLine{}
+	for rows.Next() {
+		var line domain.ProductionLine
+		if err := rows.Scan(&line.ID, &line.Name, &line.CapacityPerDay, &line.Timezone, &line.ScheduleRevision); err == nil {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
 func (s *PostgresStore) ListOrders(claims auth.Claims) []domain.Order {
 	query := `
 		SELECT id, customer, line_id, quantity, priority, status, due_date, COALESCE(note, ''), created_by,
@@ -114,11 +134,16 @@ func (s *PostgresStore) CreateOrder(req createOrderRequest, actorID string) (dom
 	if req.Priority != domain.PriorityLow && req.Priority != domain.PriorityHigh {
 		return domain.Order{}, errors.New("priority must be low or high")
 	}
-	dueDate, err := time.Parse(dateLayout, req.DueDate)
+	line, err := s.productionLine(req.LineID)
 	if err != nil {
-		return domain.Order{}, errors.New("dueDate must use YYYY-MM-DD")
+		return domain.Order{}, err
 	}
-	if _, err := s.productionLine(req.LineID); err != nil {
+	currentDate, err := currentDateInLineTimezone(line, nowUTC())
+	if err != nil {
+		return domain.Order{}, err
+	}
+	dueDate, err := validateOrderRequest(req, map[string]domain.ProductionLine{line.ID: line}, currentDate)
+	if err != nil {
 		return domain.Order{}, err
 	}
 	now := time.Now().UTC()
@@ -186,9 +211,17 @@ func (s *PostgresStore) UpdateOrderDueDate(id string, req updateOrderRequest, cl
 		order.Quantity = req.Quantity
 	}
 	if req.DueDate != "" {
-		dueDate, err := time.Parse(dateLayout, req.DueDate)
+		line, err := s.productionLine(order.LineID)
 		if err != nil {
-			return domain.Order{}, errors.New("dueDate must use YYYY-MM-DD")
+			return domain.Order{}, err
+		}
+		currentDate, err := currentDateInLineTimezone(line, nowUTC())
+		if err != nil {
+			return domain.Order{}, err
+		}
+		dueDate, err := validateFutureDueDate(req.DueDate, currentDate)
+		if err != nil {
+			return domain.Order{}, err
 		}
 		order.DueDate = dueDate
 	}
@@ -257,9 +290,17 @@ func (s *PostgresStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Clai
 		order.Quantity = req.Quantity
 	}
 	if req.DueDate != "" {
-		dueDate, err := time.Parse(dateLayout, req.DueDate)
+		line, err := s.productionLine(order.LineID)
 		if err != nil {
-			return domain.Order{}, errors.New("dueDate must use YYYY-MM-DD")
+			return domain.Order{}, err
+		}
+		currentDate, err := currentDateInLineTimezone(line, nowUTC())
+		if err != nil {
+			return domain.Order{}, err
+		}
+		dueDate, err := validateFutureDueDate(req.DueDate, currentDate)
+		if err != nil {
+			return domain.Order{}, err
 		}
 		order.DueDate = dueDate
 	}
@@ -758,10 +799,10 @@ func (s *PostgresStore) CreateHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, e
 	for lineIndex := hpaDemoFirstLine; lineIndex <= hpaDemoLastLine; lineIndex++ {
 		lineID := hpaDemoLineID(lineIndex)
 		if _, err := tx.Exec(`
-			INSERT INTO production_lines (id, name, capacity_per_day, schedule_revision)
-			VALUES ($1, $2, 10000, 0)
-			ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, capacity_per_day = EXCLUDED.capacity_per_day, schedule_revision = 0
-		`, lineID, "HPA Demo Line "+lineID); err != nil {
+			INSERT INTO production_lines (id, name, capacity_per_day, timezone, schedule_revision)
+			VALUES ($1, $2, 10000, $3, 0)
+			ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, capacity_per_day = EXCLUDED.capacity_per_day, timezone = EXCLUDED.timezone, schedule_revision = 0
+		`, lineID, "HPA Demo Line "+lineID, defaultLineTimezone); err != nil {
 			return hpaPeakSummary{}, err
 		}
 
@@ -1071,7 +1112,7 @@ func (s *PostgresStore) previewFromDB(req scheduleRequest, claims auth.Claims) (
 
 func (s *PostgresStore) productionLine(lineID string) (domain.ProductionLine, error) {
 	var line domain.ProductionLine
-	err := s.db.QueryRow("SELECT id, name, capacity_per_day, schedule_revision FROM production_lines WHERE id = $1", lineID).Scan(&line.ID, &line.Name, &line.CapacityPerDay, &line.ScheduleRevision)
+	err := s.db.QueryRow("SELECT id, name, capacity_per_day, COALESCE(timezone, $2), schedule_revision FROM production_lines WHERE id = $1", lineID, defaultLineTimezone).Scan(&line.ID, &line.Name, &line.CapacityPerDay, &line.Timezone, &line.ScheduleRevision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ProductionLine{}, errors.New("production line does not exist")
 	}

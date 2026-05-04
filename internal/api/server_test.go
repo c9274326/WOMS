@@ -14,6 +14,12 @@ import (
 	"github.com/c9274326/woms/internal/domain"
 )
 
+func init() {
+	nowUTC = func() time.Time {
+		return time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+	}
+}
+
 func TestIngressAuthRejectsMissingToken(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	req := httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)
@@ -282,6 +288,70 @@ func TestExecuteScheduleJobRespectsLineLockAndCancelledStatus(t *testing.T) {
 	}
 }
 
+func TestDefaultScheduleCurrentDateUsesServerDayWhenMissing(t *testing.T) {
+	req := defaultScheduleCurrentDate(scheduleRequest{
+		LineID:    "A",
+		StartDate: "2026-05-01",
+	}, mustAPIDate(t, "2026-05-03"))
+
+	if req.CurrentDate != "2026-05-03" {
+		t.Fatalf("expected default current date from server day, got %q", req.CurrentDate)
+	}
+}
+
+func TestLineTimezoneCurrentDateUsesPlantLocalDay(t *testing.T) {
+	now := time.Date(2026, 5, 4, 16, 30, 0, 0, time.UTC)
+
+	taipei, err := currentDateInLineTimezone(domain.ProductionLine{ID: "A", Timezone: "Asia/Taipei"}, now)
+	if err != nil {
+		t.Fatalf("taipei current date failed: %v", err)
+	}
+	newYork, err := currentDateInLineTimezone(domain.ProductionLine{ID: "B", Timezone: "America/New_York"}, now)
+	if err != nil {
+		t.Fatalf("new york current date failed: %v", err)
+	}
+
+	if taipei.Format(dateLayout) != "2026-05-05" {
+		t.Fatalf("expected Asia/Taipei today to be 2026-05-05, got %s", taipei.Format(dateLayout))
+	}
+	if newYork.Format(dateLayout) != "2026-05-04" {
+		t.Fatalf("expected America/New_York today to be 2026-05-04, got %s", newYork.Format(dateLayout))
+	}
+}
+
+func TestLinesAPIIncludesTimezone(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	req := httptest.NewRequest(http.MethodGet, "/api/lines", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Lines []domain.ProductionLine `json:"lines"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode lines response: %v", err)
+	}
+	if len(payload.Lines) == 0 || payload.Lines[0].Timezone == "" {
+		t.Fatalf("expected line timezone in response, got %+v", payload.Lines)
+	}
+	var lineD domain.ProductionLine
+	for _, line := range payload.Lines {
+		if line.ID == "D" {
+			lineD = line
+			break
+		}
+	}
+	if lineD.Timezone != "Europe/London" {
+		t.Fatalf("expected Line D timezone Europe/London, got %+v", lineD)
+	}
+}
+
 func TestOnlyAdminCanAssignUsers(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
@@ -321,6 +391,99 @@ func TestOrderValidationRejectsInvalidQuantity(t *testing.T) {
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderRejectsTodayDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-04-30"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderRejectsPastDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"high","dueDate":"2026-04-29"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderAcceptsTomorrowDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-01"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected created order, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderUsesLineTimezoneForDueDateValidation(t *testing.T) {
+	originalNow := nowUTC
+	nowUTC = func() time.Time {
+		return time.Date(2026, 5, 4, 16, 30, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() {
+		nowUTC = originalNow
+	})
+	store := NewMemoryStore()
+	store.lines["A"] = domain.ProductionLine{ID: "A", Name: "Line A", CapacityPerDay: 10000, Timezone: "Asia/Taipei"}
+	store.lines["B"] = domain.ProductionLine{ID: "B", Name: "Line B", CapacityPerDay: 10000, Timezone: "America/New_York"}
+	server := NewServer("secret", store)
+	token := login(t, server, "sales", "demo")
+
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-05"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected Taipei line to reject local-today due date, got %d body=%s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"customer":"ACME","lineId":"B","quantity":2500,"priority":"low","dueDate":"2026-05-05"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected New York line to accept local-tomorrow due date, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesCreateOrderAcceptsFutureDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	token := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"A","quantity":2500,"priority":"high","dueDate":"2026-05-02"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected created order, got %d body=%s", res.Code, res.Body.String())
 	}
 }
 
@@ -553,6 +716,46 @@ func TestSchedulePreviewRespectsRequestedFutureStart(t *testing.T) {
 	}
 }
 
+func TestSchedulePreviewDefaultsCurrentDateFromLineTimezone(t *testing.T) {
+	originalNow := nowUTC
+	nowUTC = func() time.Time {
+		return time.Date(2026, 5, 4, 16, 30, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() {
+		nowUTC = originalNow
+	})
+	store := NewMemoryStore()
+	store.lines["B"] = domain.ProductionLine{ID: "B", Name: "Line B", CapacityPerDay: 10000, Timezone: "America/New_York"}
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrderWithPriorityAndDue(t, server, salesToken, "B", "low", "2026-05-06")
+
+	schedulerB := login(t, server, "scheduler-b", "demo")
+	body := bytes.NewBufferString(`{"lineId":"B","startDate":"2026-05-04","orderIds":["ORD-1"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerB)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		CurrentDate string `json:"currentDate"`
+		Allocations []struct {
+			Date time.Time `json:"date"`
+		} `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if payload.CurrentDate != "2026-05-04" {
+		t.Fatalf("expected New York current date, got %q", payload.CurrentDate)
+	}
+	if len(payload.Allocations) != 1 || payload.Allocations[0].Date.Format(dateLayout) != "2026-05-05" {
+		t.Fatalf("expected start after New York current date, got %+v", payload.Allocations)
+	}
+}
+
 func TestSchedulerCannotReadAnotherLineCalendar(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
@@ -575,7 +778,7 @@ func TestSchedulerCannotReadAnotherLineCalendar(t *testing.T) {
 func TestSalesConfirmsDraftPreviewIntoPendingOrder(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+salesToken)
 	res := httptest.NewRecorder()
@@ -600,12 +803,57 @@ func TestSalesConfirmsDraftPreviewIntoPendingOrder(t *testing.T) {
 	}
 }
 
+func TestSalesDraftPreviewRejectsTodayDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-04-30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesDraftPreviewRejectsPastDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"high","dueDate":"2026-04-29"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+		t.Fatalf("expected unacceptable due date rejection, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSalesDraftPreviewAcceptsTomorrowDueDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-01"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected draft preview, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestSalesDraftPreviewDoesNotScheduleOtherPendingOrders(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
 	createOrder(t, server, salesToken, "A")
 
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+salesToken)
 	res := httptest.NewRecorder()
@@ -640,7 +888,7 @@ func TestManualForceConflictCanCreateScheduleJobWithAudit(t *testing.T) {
 	createScheduleJob(t, server, schedulerA, "A")
 	createOrderWithPriority(t, server, salesToken, "A", "high")
 
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved"}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res := httptest.NewRecorder()
@@ -661,7 +909,7 @@ func TestManualForceConflictCanCreateScheduleJobWithAudit(t *testing.T) {
 		t.Fatalf("expected manual conflict with affected orders, got %+v", preview.Conflicts)
 	}
 
-	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved","previewId":"` + preview.PreviewID + `"}`)
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["ORD-2"],"manualForce":true,"reason":"customer escalation approved","previewId":"` + preview.PreviewID + `"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res = httptest.NewRecorder()
@@ -698,7 +946,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	createScheduleJob(t, server, schedulerA, "A")
 	newOrderID := createOrderWithPriorityAndDue(t, server, salesToken, "A", "high", "2026-05-01")
 
-	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["` + newOrderID + `"]}`)
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res := httptest.NewRecorder()
@@ -719,7 +967,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	}
 	movableOrderID := conflictPreview.Conflicts[0].AffectedOrderIDs[0]
 
-	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true}`)
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res = httptest.NewRecorder()
@@ -745,7 +993,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 		t.Fatalf("expected high priority order on due date and moved low priority order on next day, got %+v", solutionPreview.Allocations)
 	}
 
-	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true,"previewId":"` + solutionPreview.PreviewID + `"}`)
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true,"previewId":"` + solutionPreview.PreviewID + `"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res = httptest.NewRecorder()
@@ -819,6 +1067,40 @@ func TestSchedulerCanUpdatePendingOrderDueDate(t *testing.T) {
 	}
 	if order.DueDate.Format("2006-01-02") != "2026-05-06" {
 		t.Fatalf("expected updated due date, got %s", order.DueDate)
+	}
+}
+
+func TestUpdateOrderDueDateRejectsTodayOrPast(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+
+	for _, dueDate := range []string{"2026-04-30", "2026-04-29"} {
+		body := bytes.NewBufferString(`{"dueDate":"` + dueDate + `"}`)
+		req := httptest.NewRequest(http.MethodPatch, "/api/orders/ORD-1", body)
+		req.Header.Set("Authorization", "Bearer "+schedulerA)
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+			t.Fatalf("expected unacceptable due date rejection for %s, got %d body=%s", dueDate, res.Code, res.Body.String())
+		}
+	}
+}
+
+func TestUpdateOrderDueDateAcceptsFuture(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	body := bytes.NewBufferString(`{"dueDate":"2026-05-01"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/orders/ORD-1", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected due date update, got %d body=%s", res.Code, res.Body.String())
 	}
 }
 
@@ -1002,6 +1284,34 @@ func TestSchedulerRejectsPendingOrdersAndSalesCanResubmit(t *testing.T) {
 	}
 }
 
+func TestSalesResubmitRejectsTodayOrPastDueDate(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	body := bytes.NewBufferString(`{"orderIds":["ORD-1"],"reason":"capacity unavailable before due date"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders/reject", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("reject failed: %d %s", res.Code, res.Body.String())
+	}
+
+	for _, dueDate := range []string{"2026-04-30", "2026-04-29"} {
+		body = bytes.NewBufferString(`{"orderId":"ORD-1","dueDate":"` + dueDate + `","quantity":2000}`)
+		req = httptest.NewRequest(http.MethodPost, "/api/orders/resubmit", body)
+		req.Header.Set("Authorization", "Bearer "+salesToken)
+		res = httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), unacceptableDueDateMessage) {
+			t.Fatalf("expected unacceptable due date rejection for %s, got %d body=%s", dueDate, res.Code, res.Body.String())
+		}
+	}
+}
+
 func TestSalesCannotChangeNoteDuringResubmit(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer("secret", store)
@@ -1141,7 +1451,7 @@ func startProduction(t *testing.T, server *Server, token, orderID string) {
 func createScheduleJob(t *testing.T, server *Server, token, lineID string) string {
 	t.Helper()
 	previewID := createSchedulePreview(t, server, token, lineID)
-	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
+	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01","currentDate":"2026-04-30","previewId":"` + previewID + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res := httptest.NewRecorder()
@@ -1160,7 +1470,7 @@ func createScheduleJob(t *testing.T, server *Server, token, lineID string) strin
 
 func createSchedulePreview(t *testing.T, server *Server, token, lineID string) string {
 	t.Helper()
-	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01"}`)
+	body := bytes.NewBufferString(`{"lineId":"` + lineID + `","startDate":"2026-05-01","currentDate":"2026-04-30"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res := httptest.NewRecorder()

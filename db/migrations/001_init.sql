@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS production_lines (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     capacity_per_day INTEGER NOT NULL CHECK (capacity_per_day > 0),
+    timezone TEXT NOT NULL DEFAULT 'Asia/Taipei',
     schedule_revision BIGINT NOT NULL DEFAULT 0
 );
 
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TIMESTAMPTZ NOT NULL
 );
 
+ALTER TABLE production_lines ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'Asia/Taipei';
 ALTER TABLE production_lines ADD COLUMN IF NOT EXISTS schedule_revision BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS note TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
@@ -104,10 +106,10 @@ ALTER TABLE schedule_jobs ADD CONSTRAINT schedule_jobs_status_check CHECK (statu
 ALTER TABLE schedule_allocations DROP CONSTRAINT IF EXISTS schedule_allocations_status_check;
 ALTER TABLE schedule_allocations ADD CONSTRAINT schedule_allocations_status_check CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理'));
 
-INSERT INTO production_lines (id, name, capacity_per_day)
+INSERT INTO production_lines (id, name, capacity_per_day, timezone)
 VALUES
-    ('A', 'Line A', 10000),
-    ('B', 'Line B', 10000),
-    ('C', 'Line C', 10000),
-    ('D', 'Line D', 10000)
+    ('A', 'Line A', 10000, 'Asia/Taipei'),
+    ('B', 'Line B', 10000, 'Asia/Taipei'),
+    ('C', 'Line C', 10000, 'Asia/Taipei'),
+    ('D', 'Line D', 10000, 'Europe/London')
 ON CONFLICT (id) DO NOTHING;
