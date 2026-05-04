@@ -95,4 +95,4 @@ jobs:
         run: helm template woms ./deploy/helm/woms --set api.jwtSecret=ci-dummy >/tmp/woms-rendered.yaml
 
       - name: Verify scheduler worker HPA render
-        run: ./scripts/verify-hpa-render.sh
+        run: RENDERED_MANIFEST=/tmp/woms-rendered.yaml ./scripts/verify-hpa-render.sh

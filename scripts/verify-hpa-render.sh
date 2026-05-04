@@ -3,11 +3,16 @@ set -eu
 
 RELEASE="${RELEASE:-woms}"
 CHART="${CHART:-./deploy/helm/woms}"
+RENDERED_MANIFEST="${RENDERED_MANIFEST:-}"
 
-rendered="$(mktemp)"
-trap 'rm -f "$rendered"' EXIT
+if [ -n "$RENDERED_MANIFEST" ]; then
+  rendered="$RENDERED_MANIFEST"
+else
+  rendered="$(mktemp)"
+  trap 'rm -f "$rendered"' EXIT
 
-helm template "$RELEASE" "$CHART" >"$rendered"
+  helm template "$RELEASE" "$CHART" --dependency-update >"$rendered"
+fi
 
 grep -q "kind: ScaledObject" "$rendered"
 grep -q "name: ${RELEASE}-woms-worker-hpa" "$rendered"

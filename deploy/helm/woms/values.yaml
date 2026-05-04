@@ -154,7 +154,7 @@ kafkaTopic:
     repository: docker.io/bitnami/kafka
     tag: 3.7.0-debian-12-r6
     pullPolicy: IfNotPresent
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: 420
   wait:
     maxAttempts: 60
     sleepSeconds: 5
