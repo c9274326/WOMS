@@ -171,86 +171,69 @@ docker build -f Dockerfile.web -t woms-web:local .
 
 ## Kubernetes Deployment
 
-Make sure the cluster has NGINX Ingress, KEDA, and metrics-server installed first.
+Make sure the cluster has KEDA and metrics-server installed first. NGINX Ingress is required only when `ingress.enabled=true`.
+
+A clean VM deployment should have two layers:
+
+1. Platform setup: Kubernetes, metrics-server, and KEDA.
+2. WOMS deployment: Helm installs the API, web, scheduler worker, Services, optional Ingress, KEDA ScaledObject, and the PostgreSQL, Redis, and Kafka chart dependencies.
+
+Users should not manually patch the web deployment, create Kafka topics, or tune topic partitions. Those operational details must be handled by the image, Helm chart, or platform bootstrap.
 
 Render Helm:
 
 ```bash
-helm template woms ./deploy/helm/woms \
-  --set api.image.repository=docker.io/<namespace>/woms-api \
-  --set worker.image.repository=docker.io/<namespace>/woms-scheduler-worker \
-  --set web.image.repository=docker.io/<namespace>/woms-web \
-  --set api.image.tag=<tag> \
-  --set worker.image.tag=<tag> \
-  --set web.image.tag=<tag>
+helm template woms ./deploy/helm/woms --dependency-update
 ```
 
 Deploy:
 
 ```bash
-helm upgrade --install woms ./deploy/helm/woms \
-  --namespace woms --create-namespace \
-  --set ingress.host=woms.local \
-  --set api.jwtSecret=<strong-secret> \
-  --set api.image.repository=docker.io/<namespace>/woms-api \
-  --set worker.image.repository=docker.io/<namespace>/woms-scheduler-worker \
-  --set web.image.repository=docker.io/<namespace>/woms-web \
-  --set api.image.tag=<tag> \
-  --set worker.image.tag=<tag> \
-  --set web.image.tag=<tag>
+helm upgrade --install woms ./deploy/helm/woms --dependency-update \
+  --namespace woms --create-namespace
+```
+
+The chart generates or reuses a JWT signing secret when `api.jwtSecret` is unset. Retrieve it with:
+
+```bash
+kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base64 -d
+```
+
+The bundled PostgreSQL, Redis, and Kafka defaults are for local or VM demos. Production deployments should use a custom values file with explicit external service endpoints, credentials, `api.jwtSecret`, and, for forked image builds, `imageRegistry`.
+
+For a local or VM demo, expose the web UI with port-forward:
+
+```bash
+kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
+```
+
+Open `http://127.0.0.1:8081` and log in with `admin` / `demo`.
+
+If the browser runs on a Windows host and WOMS runs on VM `192.168.56.101`, create an SSH tunnel from Windows first:
+
+```powershell
+ssh -L 8081:127.0.0.1:8081 ubuntu@192.168.56.101
 ```
 
 ### Scheduler Worker HPA Demo
 
 The HPA scenario for WOMS is the scheduler-worker backlog. During end-of-day planning or rush-order recovery, the API publishes many scheduling jobs to Kafka topic `woms.schedule.jobs`. The scheduler workers share consumer group `woms-scheduler-workers`; when lag exceeds `keda.kafka.lagThreshold`, KEDA creates and drives the HPA named `woms-woms-worker-hpa` for deployment `woms-woms-worker`. CPU utilization is kept as a secondary trigger for compute-heavy scheduling bursts.
 
-For a local Kubernetes demo, use a low Kafka lag threshold so the scale-up is visible with a small message burst:
-
-```bash
-helm upgrade --install woms ./deploy/helm/woms \
-  --namespace woms --create-namespace \
-  --set ingress.enabled=false \
-  --set api.jwtSecret=local-dev-secret \
-  --set global.imagePullPolicy=IfNotPresent \
-  --set api.image.repository=woms-api \
-  --set worker.image.repository=woms-scheduler-worker \
-  --set web.image.repository=woms-web \
-  --set api.image.tag=local \
-  --set worker.image.tag=local \
-  --set web.image.tag=local \
-  --set keda.kafka.bootstrapServers=<kafka-bootstrap>:9092 \
-  --set keda.kafka.lagThreshold=1 \
-  --set keda.maxReplicaCount=4 \
-  --set keda.cooldownPeriod=60 \
-  --set worker.env.minJobDurationMs=500
-```
-
-If the local cluster does not have a reachable Kafka broker yet, keep the same chart but disable the Kafka trigger for a KEDA/HPA smoke check:
-
-```bash
-helm upgrade --install woms ./deploy/helm/woms \
-  --namespace woms --create-namespace \
-  --set ingress.enabled=false \
-  --set api.jwtSecret=local-dev-secret \
-  --set api.image.repository=nginx \
-  --set api.image.tag=stable-alpine \
-  --set worker.image.repository=nginx \
-  --set worker.image.tag=stable-alpine \
-  --set web.image.repository=nginx \
-  --set web.image.tag=stable-alpine \
-  --set keda.kafka.enabled=false
-```
-
-Log in to the web UI as admin, open the "multi-line scheduling peak" panel, and click the peak creation button. The API clears old `L001-L200` data, creates 200 demo lines, 1,000 pending orders, and 200 scheduling jobs, then publishes them to Kafka topic `woms.schedule.jobs`. Workers consume the backlog with consumer group `woms-scheduler-workers`; the demo command sets `worker.env.minJobDurationMs=500` so local clusters have enough time to observe HPA scale-up. Production deployments default to `0`.
+Log in to the web UI as admin, open the "multi-line scheduling peak" panel, and click the peak creation button. The API clears old `L001-L200` data, creates 200 demo lines, 1,000 pending orders, and 200 scheduling jobs, then publishes them to Kafka topic `woms.schedule.jobs`. Workers consume the backlog with consumer group `woms-scheduler-workers`; the chart creates the topic automatically with a partition count no smaller than `keda.maxReplicaCount`, so HPA-created worker pods can consume in parallel.
 
 Watch KEDA create the HPA and scale the worker:
 
 ```bash
-kubectl get scaledobject,hpa,deploy -n woms
-kubectl get hpa woms-woms-worker-hpa -n woms -w
-kubectl get deploy woms-woms-worker -n woms -w
+kubectl get scaledobject,hpa,deploy,pod -n woms
+kubectl get hpa,deploy,pod -n woms -w
+kubectl describe hpa woms-woms-worker-hpa -n woms
+kubectl logs deploy/woms-woms-worker -n woms -f
 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
+
+`verify-k8s.sh` matches the default no-Ingress chart render. For an Ingress deployment, install with `--set ingress.enabled=true` and run `INGRESS_ENABLED=true NAMESPACE=woms ./scripts/verify-k8s.sh`.
+
+HPA does not create pods named `hpa-*`. It is an autoscaling resource that changes `Deployment/woms-woms-worker` replicas. A successful demo shows multiple `woms-woms-worker-*` pods, and `kubectl describe hpa woms-woms-worker-hpa -n woms` shows `SuccessfulRescale` events with the external metric above target.
 
 ### API And Web High Availability Demo
 
@@ -322,6 +305,6 @@ Minimum completion criteria:
 - API without token returns `401`.
 - Sales calling scheduler APIs returns `403`.
 - Scheduler A cannot read or mutate Scheduler B line data.
-- `helm template` renders Ingress and KEDA `ScaledObject`.
+- `helm template` renders KEDA `ScaledObject` and PDBs by default; it renders Ingress when `ingress.enabled=true`.
 - Worker replicas scale up when Kafka lag increases and scale down after lag drains.
 - README, tests, commit, and push must be completed with every feature.

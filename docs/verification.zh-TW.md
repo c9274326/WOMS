@@ -123,6 +123,8 @@ kubectl get hpa -n woms -w
 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
+`verify-k8s.sh` 會驗證預設不啟用 Ingress 的 render。若部署時啟用 Ingress，請先用 `--set ingress.enabled=true` 安裝，再執行 `INGRESS_ENABLED=true NAMESPACE=woms ./scripts/verify-k8s.sh`。
+
 期望：
 
 - Kafka lag 上升。

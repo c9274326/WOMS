@@ -88,8 +88,11 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
+      - name: Build Helm dependencies
+        run: helm dependency build ./deploy/helm/woms
+
       - name: Render Helm chart
-        run: helm template woms ./deploy/helm/woms
+        run: helm template woms ./deploy/helm/woms --set api.jwtSecret=ci-dummy >/tmp/woms-rendered.yaml
 
       - name: Verify scheduler worker HPA render
-        run: ./scripts/verify-hpa-render.sh
+        run: RENDERED_MANIFEST=/tmp/woms-rendered.yaml ./scripts/verify-hpa-render.sh

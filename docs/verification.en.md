@@ -123,6 +123,8 @@ kubectl get hpa -n woms -w
 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
+`verify-k8s.sh` verifies the default no-Ingress render. If the deployment enables Ingress, install with `--set ingress.enabled=true` and run `INGRESS_ENABLED=true NAMESPACE=woms ./scripts/verify-k8s.sh`.
+
 Expected:
 
 - Kafka lag increases.

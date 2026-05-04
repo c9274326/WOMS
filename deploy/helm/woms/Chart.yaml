@@ -4,3 +4,16 @@ description: Wafer Order Management System
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+dependencies:
+  - name: postgresql
+    version: 15.5.38
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: postgresql.enabled
+  - name: redis
+    version: 19.6.4
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: redis.enabled
+  - name: kafka
+    version: 29.3.14
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: kafka.enabled
