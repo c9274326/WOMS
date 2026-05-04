@@ -1,5 +1,5 @@
 FROM nginx:1.27-alpine
 ENV API_UPSTREAM=api:8080
-COPY web/nginx.conf /etc/nginx/templates/default.conf.template
+COPY web/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY web /usr/share/nginx/html
 EXPOSE 8080

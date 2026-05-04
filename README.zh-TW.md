@@ -232,6 +232,8 @@ kubectl logs deploy/woms-woms-worker -n woms -f
 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
+`verify-k8s.sh` 會對應預設不啟用 Ingress 的 chart render。若使用 Ingress 部署，請先用 `--set ingress.enabled=true` 安裝，再執行 `INGRESS_ENABLED=true NAMESPACE=woms ./scripts/verify-k8s.sh`。
+
 HPA 不會建立名為 `hpa-*` 的 pod。HPA 是 autoscaling resource，會調整 `Deployment/woms-woms-worker` 的 replicas；成功時會看到多個 `woms-woms-worker-*` pods。`kubectl describe hpa woms-woms-worker-hpa -n woms` 的 Events 會顯示 `SuccessfulRescale` 與 external metric above target。
 
 ### API And Web High Availability Demo
@@ -304,6 +306,6 @@ NAMESPACE=woms ./scripts/verify-k8s.sh
 - API 未帶 token 會回 `401`。
 - sales 呼叫 scheduler API 會回 `403`。
 - Scheduler A 不能讀取或修改 Scheduler B 產線資料。
-- `helm template` 可 render Ingress 與 KEDA `ScaledObject`。
+- `helm template` 預設可 render KEDA `ScaledObject` 與 PDB；設定 `ingress.enabled=true` 時才會 render Ingress。
 - Kafka lag 上升時 worker replicas 會 scale up，lag 消退後會 scale down。
 - 每個 feature 都必須完成 README、測試、commit 與 push。

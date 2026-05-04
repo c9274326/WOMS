@@ -231,6 +231,8 @@ kubectl logs deploy/woms-woms-worker -n woms -f
 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
+`verify-k8s.sh` matches the default no-Ingress chart render. For an Ingress deployment, install with `--set ingress.enabled=true` and run `INGRESS_ENABLED=true NAMESPACE=woms ./scripts/verify-k8s.sh`.
+
 HPA does not create pods named `hpa-*`. It is an autoscaling resource that changes `Deployment/woms-woms-worker` replicas. A successful demo shows multiple `woms-woms-worker-*` pods, and `kubectl describe hpa woms-woms-worker-hpa -n woms` shows `SuccessfulRescale` events with the external metric above target.
 
 ### API And Web High Availability Demo
@@ -303,6 +305,6 @@ Minimum completion criteria:
 - API without token returns `401`.
 - Sales calling scheduler APIs returns `403`.
 - Scheduler A cannot read or mutate Scheduler B line data.
-- `helm template` renders Ingress and KEDA `ScaledObject`.
+- `helm template` renders KEDA `ScaledObject` and PDBs by default; it renders Ingress when `ingress.enabled=true`.
 - Worker replicas scale up when Kafka lag increases and scale down after lag drains.
 - README, tests, commit, and push must be completed with every feature.
