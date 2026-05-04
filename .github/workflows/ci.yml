@@ -88,6 +88,9 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
+      - name: Build Helm dependencies
+        run: helm dependency build ./deploy/helm/woms
+
       - name: Render Helm chart
         run: helm template woms ./deploy/helm/woms
 
