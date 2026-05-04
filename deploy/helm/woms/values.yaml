@@ -7,7 +7,7 @@ api:
     minAvailable: 1
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-api
-    tag: v0.1.20
+    tag: v0.1.21
   jwtSecret: change-me-in-production
   env:
     store: postgres
@@ -29,7 +29,7 @@ worker:
   replicaCount: 1
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-scheduler-worker
-    tag: v0.1.20
+    tag: v0.1.21
   env:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
     minJobDurationMs: "0"
@@ -48,7 +48,7 @@ web:
     minAvailable: 1
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-web
-    tag: v0.1.20
+    tag: v0.1.21
   resources:
     requests:
       cpu: 50m
