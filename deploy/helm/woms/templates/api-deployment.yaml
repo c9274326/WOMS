@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          image: "{{ include "woms.image" (dict "registry" .Values.imageRegistry "repository" .Values.api.image.repository "tag" .Values.api.image.tag) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

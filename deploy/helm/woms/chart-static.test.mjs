@@ -10,6 +10,8 @@ const workerDeployment = readFileSync(new URL("./templates/worker-deployment.yam
 const webDeployment = readFileSync(new URL("./templates/web-deployment.yaml", import.meta.url), "utf8");
 const services = readFileSync(new URL("./templates/services.yaml", import.meta.url), "utf8");
 const kafkaTopicJob = readFileSync(new URL("./templates/kafka-topic-job.yaml", import.meta.url), "utf8");
+const secret = readFileSync(new URL("./templates/secret.yaml", import.meta.url), "utf8");
+const notes = readFileSync(new URL("./templates/NOTES.txt", import.meta.url), "utf8");
 
 test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /store:\s+postgres/);
@@ -41,9 +43,13 @@ test("Helm chart deploys required platform dependencies by default", () => {
 });
 
 test("Default Docker image tags use v-prefixed release tags", () => {
+  assert.match(values, /^imageRegistry:\s+docker\.io\/d11nn/m);
   assert.match(values, /woms-api[\s\S]*tag:\s+v0\.1\.21/);
   assert.match(values, /woms-scheduler-worker[\s\S]*tag:\s+v0\.1\.21/);
   assert.match(values, /woms-web[\s\S]*tag:\s+v0\.1\.21/);
+  assert.match(apiDeployment, /include "woms\.image"/);
+  assert.match(workerDeployment, /include "woms\.image"/);
+  assert.match(webDeployment, /include "woms\.image"/);
 });
 
 test("KEDA ScaledObject template points at scheduler worker backlog", () => {
@@ -62,11 +68,22 @@ test("KEDA ScaledObject template points at scheduler worker backlog", () => {
 test("Kafka topic hook creates the scheduling topic with enough partitions for HPA", () => {
   assert.match(kafkaTopicJob, /kind:\s+Job/);
   assert.match(kafkaTopicJob, /helm\.sh\/hook/);
+  assert.match(kafkaTopicJob, /activeDeadlineSeconds:\s+\{\{ \.Values\.kafkaTopic\.activeDeadlineSeconds \}\}/);
   assert.match(kafkaTopicJob, /kafka-topics\.sh/);
+  assert.match(kafkaTopicJob, /max_attempts=\{\{ \.Values\.kafkaTopic\.wait\.maxAttempts \| int \}\}/);
+  assert.match(kafkaTopicJob, /exit 1/);
   assert.match(kafkaTopicJob, /--create/);
   assert.match(kafkaTopicJob, /--if-not-exists/);
   assert.match(kafkaTopicJob, /--alter/);
   assert.match(kafkaTopicJob, /\$partitions = \(\.Values\.keda\.maxReplicaCount \| int\)/);
+});
+
+test("API JWT secret is generated when unset and documented for retrieval", () => {
+  assert.match(values, /jwtSecret:\s+""/);
+  assert.match(secret, /lookup "v1" "Secret"/);
+  assert.match(secret, /randAlphaNum 64/);
+  assert.match(notes, /generated or reused a JWT secret/);
+  assert.match(notes, /kubectl get secret/);
 });
 
 test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () => {
@@ -82,7 +99,10 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
 });
 
 test("Web deployment is runnable without manual securityContext patches", () => {
-  assert.match(services, /name:\s+api/);
+  assert.doesNotMatch(services, /name:\s+api\s*\n/);
+  assert.match(services, /name:\s+\{\{ include "woms\.fullname" \. \}\}-api/);
+  assert.match(webDeployment, /name:\s+API_UPSTREAM/);
+  assert.match(webDeployment, /value:\s+\{\{ printf "%s-api:8080" \(include "woms\.fullname" \.\) \| quote \}\}/);
   assert.match(webDeployment, /fsGroup:\s+101/);
   assert.match(webDeployment, /runAsNonRoot:\s+true/);
   assert.match(webDeployment, /runAsUser:\s+101/);

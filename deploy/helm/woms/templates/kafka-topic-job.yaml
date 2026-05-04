@@ -15,6 +15,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 6
+  activeDeadlineSeconds: {{ .Values.kafkaTopic.activeDeadlineSeconds }}
   template:
     metadata:
       labels:
@@ -34,10 +35,18 @@ spec:
               bootstrap={{ .Values.keda.kafka.bootstrapServers | quote }}
               partitions={{ $partitions }}
               replication={{ .Values.kafkaTopic.replicationFactor | int }}
+              max_attempts={{ .Values.kafkaTopic.wait.maxAttempts | int }}
+              sleep_seconds={{ .Values.kafkaTopic.wait.sleepSeconds | int }}
 
+              attempt=1
               until kafka-topics.sh --bootstrap-server "${bootstrap}" --list >/dev/null 2>&1; do
-                echo "waiting for Kafka at ${bootstrap}"
-                sleep 5
+                if [ "${attempt}" -ge "${max_attempts}" ]; then
+                  echo "Kafka at ${bootstrap} was not reachable after ${max_attempts} attempts" >&2
+                  exit 1
+                fi
+                echo "waiting for Kafka at ${bootstrap} (${attempt}/${max_attempts})"
+                attempt=$((attempt + 1))
+                sleep "${sleep_seconds}"
               done
 
               kafka-topics.sh \

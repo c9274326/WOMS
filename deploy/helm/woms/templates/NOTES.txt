@@ -1,0 +1,14 @@
+{{- $secretName := printf "%s-api" (include "woms.fullname" .) -}}
+WOMS has been deployed.
+
+JWT signing secret:
+{{- if .Values.api.jwtSecret }}
+- The chart used the explicit value from api.jwtSecret.
+{{- else }}
+- The chart generated or reused a JWT secret in Kubernetes Secret {{ $secretName }}.
+{{- end }}
+- Retrieve it with:
+  kubectl get secret {{ $secretName }} -n {{ .Release.Namespace }} -o jsonpath='{.data.JWT_SECRET}' | base64 -d
+
+The bundled PostgreSQL, Redis, and Kafka dependency defaults are intended for local or VM demos.
+For production, provide explicit external service endpoints and credentials through a custom values file.

@@ -22,11 +22,14 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: web
-          image: "{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          image: "{{ include "woms.image" (dict "registry" .Values.imageRegistry "repository" .Values.web.image.repository "tag" .Values.web.image.tag) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 8080
+          env:
+            - name: API_UPSTREAM
+              value: {{ printf "%s-api:8080" (include "woms.fullname" .) | quote }}
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
           securityContext:

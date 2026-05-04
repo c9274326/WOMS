@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: scheduler-worker
-          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          image: "{{ include "woms.image" (dict "registry" .Values.imageRegistry "repository" .Values.worker.image.repository "tag" .Values.worker.image.tag) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
             - name: KAFKA_BROKERS

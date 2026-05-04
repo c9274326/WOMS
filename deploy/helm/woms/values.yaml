@@ -1,14 +1,16 @@
 global:
   imagePullPolicy: IfNotPresent
 
+imageRegistry: docker.io/d11nn
+
 api:
   replicaCount: 2
   pdb:
     minAvailable: 1
   image:
-    repository: docker.io/d11nn/woms-api
+    repository: woms-api
     tag: v0.1.21
-  jwtSecret: change-me-in-production
+  jwtSecret: ""
   env:
     store: postgres
     demoSeedData: "true"
@@ -28,7 +30,7 @@ api:
 worker:
   replicaCount: 1
   image:
-    repository: docker.io/d11nn/woms-scheduler-worker
+    repository: woms-scheduler-worker
     tag: v0.1.21
   env:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
@@ -47,7 +49,7 @@ web:
   pdb:
     minAvailable: 1
   image:
-    repository: docker.io/d11nn/woms-web
+    repository: woms-web
     tag: v0.1.21
   resources:
     requests:
@@ -152,5 +154,9 @@ kafkaTopic:
     repository: docker.io/bitnami/kafka
     tag: 3.7.0-debian-12-r6
     pullPolicy: IfNotPresent
+  activeDeadlineSeconds: 300
+  wait:
+    maxAttempts: 60
+    sleepSeconds: 5
   partitions: 0
   replicationFactor: 1

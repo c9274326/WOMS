@@ -193,6 +193,14 @@ helm upgrade --install woms ./deploy/helm/woms --dependency-update \
   --namespace woms --create-namespace
 ```
 
+The chart generates or reuses a JWT signing secret when `api.jwtSecret` is unset. Retrieve it with:
+
+```bash
+kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base64 -d
+```
+
+The bundled PostgreSQL, Redis, and Kafka defaults are for local or VM demos. Production deployments should use a custom values file with explicit external service endpoints, credentials, `api.jwtSecret`, and, for forked image builds, `imageRegistry`.
+
 For a local or VM demo, expose the web UI with port-forward:
 
 ```bash

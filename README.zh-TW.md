@@ -194,6 +194,14 @@ helm upgrade --install woms ./deploy/helm/woms --dependency-update \
   --namespace woms --create-namespace
 ```
 
+當 `api.jwtSecret` 未設定時，chart 會自動產生或重用 JWT signing secret。可用下列指令取得：
+
+```bash
+kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base64 -d
+```
+
+內建 PostgreSQL、Redis 與 Kafka 預設值只供本機或 VM demo 使用。正式環境應使用自訂 values file，明確設定外部服務 endpoint、credentials、`api.jwtSecret`；若使用 fork 後自行建置的 images，也應設定 `imageRegistry`。
+
 本機或 VM demo 可用 port-forward 開啟前端：
 
 ```bash
