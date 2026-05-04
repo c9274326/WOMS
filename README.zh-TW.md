@@ -172,86 +172,59 @@ docker build -f Dockerfile.web -t woms-web:local .
 
 ## Kubernetes 部署
 
-請先確認叢集已安裝 NGINX Ingress、KEDA 與 metrics-server。
+請先確認叢集已安裝 KEDA 與 metrics-server。只有啟用 `ingress.enabled=true` 時才需要 NGINX Ingress。
+
+乾淨 VM 的使用者流程應該分成兩層：
+
+1. 平台準備：Kubernetes、metrics-server 與 KEDA。
+2. WOMS 部署：使用 Helm 部署 API、web、scheduler-worker、Service、可選的 Ingress、KEDA ScaledObject，以及 PostgreSQL、Redis、Kafka chart dependencies。
+
+使用者不應手動 patch web deployment、手動建立 Kafka topic，或手動調整 topic partitions。這些都必須由 image、Helm chart 或平台 bootstrap 自動處理。
 
 Render Helm：
 
 ```bash
-helm template woms ./deploy/helm/woms \
-  --set api.image.repository=docker.io/<namespace>/woms-api \
-  --set worker.image.repository=docker.io/<namespace>/woms-scheduler-worker \
-  --set web.image.repository=docker.io/<namespace>/woms-web \
-  --set api.image.tag=<tag> \
-  --set worker.image.tag=<tag> \
-  --set web.image.tag=<tag>
+helm template woms ./deploy/helm/woms --dependency-update
 ```
 
 Deploy：
 
 ```bash
-helm upgrade --install woms ./deploy/helm/woms \
-  --namespace woms --create-namespace \
-  --set ingress.host=woms.local \
-  --set api.jwtSecret=<strong-secret> \
-  --set api.image.repository=docker.io/<namespace>/woms-api \
-  --set worker.image.repository=docker.io/<namespace>/woms-scheduler-worker \
-  --set web.image.repository=docker.io/<namespace>/woms-web \
-  --set api.image.tag=<tag> \
-  --set worker.image.tag=<tag> \
-  --set web.image.tag=<tag>
+helm upgrade --install woms ./deploy/helm/woms --dependency-update \
+  --namespace woms --create-namespace
+```
+
+本機或 VM demo 可用 port-forward 開啟前端：
+
+```bash
+kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
+```
+
+瀏覽器開啟 `http://127.0.0.1:8081`，demo 帳號為 `admin` / `demo`。
+
+如果瀏覽器在另一台 Windows 主機，而 WOMS 跑在 VM `192.168.56.101`，先從 Windows 建立 SSH tunnel：
+
+```powershell
+ssh -L 8081:127.0.0.1:8081 ubuntu@192.168.56.101
 ```
 
 ### Scheduler Worker HPA Demo
 
 WOMS 的 HPA 情境是 scheduler-worker backlog。月底排程或急單復原時，API 會把大量排程任務送到 Kafka topic `woms.schedule.jobs`。scheduler workers 共用 consumer group `woms-scheduler-workers`；當 lag 超過 `keda.kafka.lagThreshold`，KEDA 會建立並驅動 deployment `woms-woms-worker` 的 HPA `woms-woms-worker-hpa`。CPU utilization 保留為第二 trigger，用來支援排程計算尖峰。
 
-本機 Kubernetes demo 可把 Kafka lag threshold 調低，讓少量訊息就能看見 scale-up：
-
-```bash
-helm upgrade --install woms ./deploy/helm/woms \
-  --namespace woms --create-namespace \
-  --set ingress.enabled=false \
-  --set api.jwtSecret=local-dev-secret \
-  --set global.imagePullPolicy=IfNotPresent \
-  --set api.image.repository=woms-api \
-  --set worker.image.repository=woms-scheduler-worker \
-  --set web.image.repository=woms-web \
-  --set api.image.tag=local \
-  --set worker.image.tag=local \
-  --set web.image.tag=local \
-  --set keda.kafka.bootstrapServers=<kafka-bootstrap>:9092 \
-  --set keda.kafka.lagThreshold=1 \
-  --set keda.maxReplicaCount=4 \
-  --set keda.cooldownPeriod=60 \
-  --set worker.env.minJobDurationMs=500
-```
-
-如果本機 cluster 還沒有可連線的 Kafka broker，可以保留同一份 chart，但先關閉 Kafka trigger 做 KEDA/HPA smoke check：
-
-```bash
-helm upgrade --install woms ./deploy/helm/woms \
-  --namespace woms --create-namespace \
-  --set ingress.enabled=false \
-  --set api.jwtSecret=local-dev-secret \
-  --set api.image.repository=nginx \
-  --set api.image.tag=stable-alpine \
-  --set worker.image.repository=nginx \
-  --set worker.image.tag=stable-alpine \
-  --set web.image.repository=nginx \
-  --set web.image.tag=stable-alpine \
-  --set keda.kafka.enabled=false
-```
-
-用 admin 登入 web，開啟「多產線排程尖峰」面板並按「建立多產線排程尖峰」。API 會先清除 `L001-L200` 舊資料，再建立 200 條 demo 產線、1,000 張待排程訂單與 200 個排程任務，並 publish 到 Kafka topic `woms.schedule.jobs`。worker 會用 consumer group `woms-scheduler-workers` 消化 backlog；demo command 會設定 `worker.env.minJobDurationMs=500`，讓本機環境比較容易觀察 HPA scale-up，正式環境預設為 `0`。
+用 admin 登入 web，開啟「多產線排程尖峰」面板並按「建立多產線排程尖峰」。API 會先清除 `L001-L200` 舊資料，再建立 200 條 demo 產線、1,000 張待排程訂單與 200 個排程任務，並 publish 到 Kafka topic `woms.schedule.jobs`。worker 會用 consumer group `woms-scheduler-workers` 消化 backlog；chart 會自動建立 topic，partition 數預設不小於 `keda.maxReplicaCount`，讓 HPA 擴出的 worker pods 可以平行消費。
 
 觀察 KEDA 建立 HPA 並擴展 worker：
 
 ```bash
-kubectl get scaledobject,hpa,deploy -n woms
-kubectl get hpa woms-woms-worker-hpa -n woms -w
-kubectl get deploy woms-woms-worker -n woms -w
+kubectl get scaledobject,hpa,deploy,pod -n woms
+kubectl get hpa,deploy,pod -n woms -w
+kubectl describe hpa woms-woms-worker-hpa -n woms
+kubectl logs deploy/woms-woms-worker -n woms -f
 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
+
+HPA 不會建立名為 `hpa-*` 的 pod。HPA 是 autoscaling resource，會調整 `Deployment/woms-woms-worker` 的 replicas；成功時會看到多個 `woms-woms-worker-*` pods。`kubectl describe hpa woms-woms-worker-hpa -n woms` 的 Events 會顯示 `SuccessfulRescale` 與 external metric above target。
 
 ### API And Web High Availability Demo
 

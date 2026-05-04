@@ -6,14 +6,14 @@ api:
   pdb:
     minAvailable: 1
   image:
-    repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-api
+    repository: docker.io/d11nn/woms-api
     tag: v0.1.21
   jwtSecret: change-me-in-production
   env:
     store: postgres
     demoSeedData: "true"
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
-    redisAddr: redis:6379
+    redisAddr: redis-master:6379
     kafkaBrokers: kafka:9092
     scheduleTopic: woms.schedule.jobs
     kafkaPublishEnabled: "true"
@@ -28,7 +28,7 @@ api:
 worker:
   replicaCount: 1
   image:
-    repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-scheduler-worker
+    repository: docker.io/d11nn/woms-scheduler-worker
     tag: v0.1.21
   env:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
@@ -47,7 +47,7 @@ web:
   pdb:
     minAvailable: 1
   image:
-    repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-web
+    repository: docker.io/d11nn/woms-web
     tag: v0.1.21
   resources:
     requests:
@@ -58,7 +58,7 @@ web:
       memory: 128Mi
 
 ingress:
-  enabled: true
+  enabled: false
   className: nginx
   host: woms.local
   tls:
@@ -92,3 +92,65 @@ keda:
   cpu:
     enabled: true
     targetUtilization: "70"
+
+postgresql:
+  enabled: true
+  fullnameOverride: postgres
+  auth:
+    username: woms
+    password: woms
+    database: woms
+  primary:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+redis:
+  enabled: true
+  fullnameOverride: redis
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+kafka:
+  enabled: true
+  fullnameOverride: kafka
+  controller:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+  broker:
+    replicaCount: 0
+  kraft:
+    enabled: true
+  listeners:
+    client:
+      protocol: PLAINTEXT
+  provisioning:
+    enabled: false
+
+kafkaTopic:
+  enabled: true
+  image:
+    repository: docker.io/bitnami/kafka
+    tag: 3.7.0-debian-12-r6
+    pullPolicy: IfNotPresent
+  partitions: 0
+  replicationFactor: 1
