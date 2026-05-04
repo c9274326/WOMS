@@ -39,6 +39,8 @@ spec:
             runAsUser: 101
             runAsGroup: 101
           volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
             - name: nginx-cache
               mountPath: /var/cache/nginx
             - name: nginx-run
@@ -46,6 +48,8 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: nginx-conf
+          emptyDir: {}
         - name: nginx-cache
           emptyDir: {}
         - name: nginx-run

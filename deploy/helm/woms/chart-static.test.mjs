@@ -107,6 +107,7 @@ test("Web deployment is runnable without manual securityContext patches", () => 
   assert.match(webDeployment, /runAsNonRoot:\s+true/);
   assert.match(webDeployment, /runAsUser:\s+101/);
   assert.match(webDeployment, /readOnlyRootFilesystem:\s+true/);
+  assert.match(webDeployment, /mountPath:\s+\/etc\/nginx\/conf\.d/);
   assert.match(webDeployment, /mountPath:\s+\/var\/cache\/nginx/);
   assert.match(webDeployment, /mountPath:\s+\/var\/run/);
   assert.match(webDeployment, /mountPath:\s+\/tmp/);
