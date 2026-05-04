@@ -28,6 +28,13 @@ const fallbackLines = ["A", "B", "C", "D"].map((id) => ({
   timezone: id === "D" ? "Europe/London" : defaultTimezone,
 }));
 const priorities = ["low", "high"];
+const hpaJobStatusLabels = {
+  queued: "佇列中",
+  running: "執行中",
+  completed: "已完成",
+  failed: "失敗",
+  cancelled: "已取消",
+};
 
 const state = {
   token: localStorage.getItem("woms.token") ?? "",
@@ -37,6 +44,7 @@ const state = {
   orders: [],
   calendarAllocations: [],
   preview: null,
+  hpaPeak: null,
   productionOrderId: "",
   scheduleHistory: [],
   rejectOrderIds: [],
@@ -115,10 +123,50 @@ document.getElementById("assign-user-form").addEventListener("submit", async (ev
       method: "PATCH",
       body: JSON.stringify(data),
     });
-    showMessage("帳號已更新", `${user.username} 現在是 ${user.role}${user.lineId ? ` / Line ${user.lineId}` : ""}`);
+    showMessage("帳號已更新", `${user.username} 現在是${roleLabel(user.role)}${user.lineId ? `，產線 ${user.lineId}` : ""}`);
     await loadUsers();
   } catch (error) {
     showMessage("帳號更新失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("create-hpa-peak").addEventListener("click", async () => {
+  const ok = window.confirm("確定要建立 L001-L200 的多產線排程尖峰嗎？這會建立大量排程任務並可能觸發 worker 擴容。");
+  if (!ok) {
+    return;
+  }
+  try {
+    renderHPAPeakLoading("正在建立 200 條 demo 產線、1,000 張待排程訂單與 200 個排程任務...");
+    const payload = await request("/api/demo/hpa-peak", { method: "POST" });
+    state.hpaPeak = payload.summary;
+    renderHPAPeakSummary();
+    showMessage("排程尖峰已建立", "多產線排程任務已送入背景佇列，請觀察 Kafka lag 與 worker HPA。");
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("排程尖峰建立失敗", error.message, "warn");
+    await loadHPAPeakSummary();
+  }
+});
+
+document.getElementById("refresh-hpa-peak").addEventListener("click", async () => {
+  await loadHPAPeakSummary();
+});
+
+document.getElementById("clear-hpa-peak").addEventListener("click", async () => {
+  const ok = window.confirm("確定要清除 L001-L200 的排程尖峰資料嗎？佇列中與執行中的任務會先取消。");
+  if (!ok) {
+    return;
+  }
+  try {
+    renderHPAPeakLoading("正在取消任務並清除 L001-L200 的訂單、排程與紀錄...");
+    const payload = await request("/api/demo/hpa-peak", { method: "DELETE" });
+    state.hpaPeak = payload.summary;
+    renderHPAPeakSummary();
+    showMessage("排程尖峰已清除", "L001-L200 的排程尖峰資料已清除。");
+    await refreshWorkspace();
+  } catch (error) {
+    showMessage("清除失敗", error.message, "warn");
+    await loadHPAPeakSummary();
   }
 });
 
@@ -268,6 +316,11 @@ document.getElementById("confirm-schedule-job").addEventListener("click", async 
     const scheduledCount = scheduledOrderIds.length;
     closePreviewPage();
     scheduledOrderIds.forEach((orderId) => state.selectedOrderIds.delete(orderId));
+    if (payload.status === "queued" || payload.status === "running") {
+      showMessage("排程任務已送出", `任務 ${payload.id} 已進入背景排程，完成後會更新日曆。`);
+      await waitForScheduleJob(payload.id);
+      return;
+    }
     showMessage("排程完成", `任務 ${payload.id} 已完成，日曆已更新。`);
     await refreshWorkspace();
   } catch (error) {
@@ -385,7 +438,7 @@ if (state.token) {
   refreshWorkspace().catch((error) => {
     clearSession();
     renderAuthState();
-    showMessage("Session 已失效", error.message, "warn");
+    showMessage("登入狀態已失效", error.message, "warn");
   });
 } else {
   renderWorkspace();
@@ -398,6 +451,7 @@ async function refreshWorkspace() {
   await loadScheduleHistory();
   if (state.user?.role === "admin") {
     await loadUsers();
+    await loadHPAPeakSummary();
   }
   renderAuthState();
 }
@@ -412,6 +466,7 @@ function renderWorkspace() {
   renderCalendar();
   renderPreviewSummary();
   renderScheduleHistory();
+  renderHPAPeakSummary();
   syncDueDateMinimums();
 }
 
@@ -429,6 +484,17 @@ async function loadUsers() {
   const payload = await request("/api/users");
   state.users = payload.users ?? [];
   renderUsers();
+}
+
+async function loadHPAPeakSummary() {
+  if (!state.token || state.user?.role !== "admin") {
+    state.hpaPeak = null;
+    renderHPAPeakSummary();
+    return;
+  }
+  const payload = await request("/api/demo/hpa-peak");
+  state.hpaPeak = payload.summary;
+  renderHPAPeakSummary();
 }
 
 async function loadLines() {
@@ -526,8 +592,51 @@ function renderAuthState() {
 function renderUsers() {
   const select = document.getElementById("assign-username");
   select.innerHTML = state.users.map((user) => `
-    <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${escapeHtml(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""})</option>
+    <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${roleLabel(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""})</option>
   `).join("");
+}
+
+function renderHPAPeakLoading(message) {
+  const panel = document.getElementById("hpa-demo-summary");
+  if (!panel) {
+    return;
+  }
+  panel.innerHTML = `<div class="hpa-loading">${escapeHtml(message)}</div>`;
+}
+
+function renderHPAPeakSummary() {
+  const panel = document.getElementById("hpa-demo-summary");
+  if (!panel) {
+    return;
+  }
+  const summary = state.hpaPeak;
+  if (!summary) {
+    panel.textContent = "尚未建立排程尖峰資料";
+    return;
+  }
+  const hpaStatuses = summary.statuses ?? {};
+  const failedMessages = summary.failedMessages?.length
+    ? `<div class="hpa-failures">${summary.failedMessages.map((message) => `<span>${escapeHtml(message)}</span>`).join("")}</div>`
+    : "";
+  panel.innerHTML = `
+    <div class="hpa-metrics">
+      <span>產線 ${Number(summary.lineCount ?? 0).toLocaleString()}</span>
+      <span>訂單 ${Number(summary.orderCount ?? 0).toLocaleString()}</span>
+      <span>排程任務 ${Number(summary.jobCount ?? 0).toLocaleString()}</span>
+    </div>
+    <div class="hpa-status-grid">
+      ${Object.entries(hpaJobStatusLabels).map(([status, label]) => `<span>${label} ${Number(hpaStatuses[status] ?? 0).toLocaleString()}</span>`).join("")}
+    </div>
+    <dl class="hpa-metadata">
+      <div><dt>Kafka 主題</dt><dd>${escapeHtml(summary.topic ?? "woms.schedule.jobs")}</dd></div>
+      <div><dt>消費者群組</dt><dd>${escapeHtml(summary.consumerGroup ?? "woms-scheduler-workers")}</dd></div>
+      <div><dt>HPA 名稱</dt><dd>${escapeHtml(summary.hpaName ?? "woms-woms-worker-hpa")}</dd></div>
+      <div><dt>部署名稱</dt><dd>${escapeHtml(summary.deploymentName ?? "woms-woms-worker")}</dd></div>
+      <div><dt>觀察指令</dt><dd>${escapeHtml(summary.watchCommand ?? "kubectl get hpa,deploy,pod -n woms -w")}</dd></div>
+    </dl>
+    <p class="hpa-reason">${escapeHtml(summary.reason ?? "Kafka lag 上升時，KEDA 會擴充 scheduler-worker pods。")}</p>
+    ${failedMessages}
+  `;
 }
 
 function renderLineOptions() {
@@ -611,7 +720,7 @@ function renderSalesRejectedOrders() {
   if (!list) {
     return;
   }
-  const rejected = state.user?.role === "sales" ? state.orders.filter((order) => order.status === "需業務處理") : [];
+  const rejected = state.user?.role === "sales" ? state.orders.filter((order) => order.status === "需業務處理" && order.createdBy === state.user.id) : [];
   list.innerHTML = "";
   for (const order of rejected) {
     list.appendChild(renderOrderCard(order));
@@ -740,6 +849,14 @@ function renderStatusSidebar() {
   }
 }
 
+function roleLabel(role) {
+  return {
+    admin: "管理員",
+    sales: "業務",
+    scheduler: "排程工程師",
+  }[role] ?? "未知角色";
+}
+
 function renderCalendar() {
   const year = state.calendarDate.getUTCFullYear();
   const monthIndex = state.calendarDate.getUTCMonth();
@@ -816,7 +933,8 @@ function renderPreviewSummary() {
   const preview = document.getElementById("preview-page-list");
   if (!state.preview) {
     preview.textContent = "尚未試排";
-    document.getElementById("preview-page-title").textContent = "試排與任務";
+    document.getElementById("preview-page-title").textContent = "訂單分配預覽";
+    document.getElementById("preview-detail-title").textContent = "分配明細";
     document.getElementById("confirm-preview-order").hidden = true;
     document.getElementById("confirm-schedule-job").hidden = true;
     document.getElementById("close-preview-page").hidden = true;
@@ -863,7 +981,8 @@ function renderPreviewPage() {
   const canConfirmSchedule = state.preview?.kind === "schedule"
     && state.user?.role === "scheduler"
     && (conflicts.length === 0 || (manualForce && conflictsCanBeManuallyForced(conflicts)));
-  document.getElementById("preview-page-title").textContent = conflicts.length > 0 ? "衝突處理" : "排程結果確認";
+  document.getElementById("preview-page-title").textContent = conflicts.length > 0 ? "衝突處理" : "訂單分配預覽";
+  document.getElementById("preview-detail-title").textContent = conflicts.length > 0 ? "衝突清單" : "分配明細";
   document.getElementById("close-preview-page").hidden = false;
   pageList.innerHTML = [
     ...conflicts.map((conflict, index) => renderConflictItem(conflict, index, manualForce)),
@@ -1430,6 +1549,32 @@ async function retryPreview(overrides) {
   openPreviewDialog(result);
 }
 
+async function waitForScheduleJob(jobId, attempts = 20) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await delay(1000);
+    const job = await request(`/api/schedules/jobs/${encodeURIComponent(jobId)}`);
+    if (job.status === "completed") {
+      showMessage("排程完成", `任務 ${job.id} 已完成，日曆已更新。`);
+      await refreshWorkspace();
+      return job;
+    }
+    if (job.status === "failed" || job.status === "cancelled") {
+      showMessage("排程未完成", job.message ?? "排程任務未完成。", "warn");
+      await refreshWorkspace();
+      return job;
+    }
+  }
+  showMessage("排程仍在背景執行", "排程任務尚未完成，請稍後重新整理狀態。");
+  await refreshWorkspace();
+  return null;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 async function request(path, options = {}, needsAuth = true) {
   const headers = {
     "Content-Type": "application/json",
@@ -1448,7 +1593,7 @@ async function request(path, options = {}, needsAuth = true) {
       clearSession();
       renderAuthState();
     }
-    throw new Error(payload.error ?? "request failed");
+    throw new Error(payload.error ?? "請求失敗，請稍後再試。");
   }
   return payload;
 }

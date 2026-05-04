@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -14,8 +13,8 @@ import (
 )
 
 var (
-	ErrInvalidToken = errors.New("invalid token")
-	ErrExpiredToken = errors.New("expired token")
+	ErrInvalidToken = errors.New("無效的登入權杖")
+	ErrExpiredToken = errors.New("登入權杖已過期")
 )
 
 type Claims struct {
@@ -27,7 +26,7 @@ type Claims struct {
 
 func CreateToken(secret string, claims Claims, ttl time.Duration) (string, error) {
 	if secret == "" {
-		return "", errors.New("jwt secret is required")
+		return "", errors.New("JWT secret 不可為空")
 	}
 	claims.Expires = time.Now().Add(ttl).Unix()
 
@@ -84,7 +83,7 @@ func VerifyToken(secret, token string) (Claims, error) {
 func BearerToken(header string) (string, error) {
 	const prefix = "Bearer "
 	if !strings.HasPrefix(header, prefix) {
-		return "", fmt.Errorf("%w: missing bearer prefix", ErrInvalidToken)
+		return "", ErrInvalidToken
 	}
 	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
 	if token == "" {

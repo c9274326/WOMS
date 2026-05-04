@@ -28,6 +28,12 @@ spec:
               value: {{ .Values.keda.kafka.topic | quote }}
             - name: KAFKA_CONSUMER_GROUP
               value: {{ .Values.keda.kafka.consumerGroup | quote }}
+            - name: DATABASE_URL
+              value: {{ .Values.worker.env.databaseUrl | quote }}
+            - name: WORKER_MIN_JOB_DURATION_MS
+              value: {{ .Values.worker.env.minJobDurationMs | quote }}
+            - name: WORKER_MAX_RETRIES
+              value: {{ .Values.worker.env.maxRetries | quote }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           securityContext:

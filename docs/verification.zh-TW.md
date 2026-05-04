@@ -115,7 +115,7 @@ kubectl get scaledobject,hpa -n woms
 kubectl describe scaledobject -n woms
 ```
 
-送入大量 Kafka scheduling messages 後：
+用 admin 登入 web，按「建立多產線排程尖峰」。確認畫面顯示 200 條產線、1,000 張訂單與 200 個 queued jobs，並顯示 Kafka topic、consumer group、HPA 與 deployment 名稱。接著觀察：
 
 ```bash
 kubectl get deploy -n woms -w
@@ -129,6 +129,7 @@ NAMESPACE=woms ./scripts/verify-k8s.sh
 - worker replicas 超過 `minReplicaCount`。
 - lag 清空並等待 cooldown 後 replicas scale down。
 - 若 CPU trigger 未生效，先確認 metrics-server 與 pod resource requests。
+- demo 後按「清除排程尖峰資料」，確認 `L001-L200` 訂單與 jobs 清空。
 
 ## 7. API/Web High Availability 驗證
 

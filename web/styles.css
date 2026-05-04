@@ -153,6 +153,70 @@ body:not([data-role="scheduler"]) .layout {
   background: #fffdf5;
 }
 
+.hpa-demo-panel {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.hpa-demo-summary {
+  display: grid;
+  gap: 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.hpa-metrics,
+.hpa-status-grid,
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hpa-metrics span,
+.hpa-status-grid span {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #fff;
+}
+
+.hpa-metadata {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.hpa-metadata div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.hpa-metadata dt {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.hpa-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hpa-reason,
+.hpa-loading {
+  margin: 0;
+  color: var(--muted);
+}
+
+.hpa-failures {
+  display: grid;
+  gap: 4px;
+  color: var(--danger);
+}
+
 .inline-form {
   grid-template-columns: repeat(4, minmax(120px, 1fr));
   align-items: end;

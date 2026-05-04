@@ -32,6 +32,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "woms.fullname" . }}-api
                   key: JWT_SECRET
+            - name: API_STORE
+              value: {{ .Values.api.env.store | quote }}
             - name: DEMO_SEED_DATA
               value: {{ .Values.api.env.demoSeedData | quote }}
             - name: DATABASE_URL
@@ -42,6 +44,8 @@ spec:
               value: {{ .Values.api.env.kafkaBrokers | quote }}
             - name: KAFKA_SCHEDULE_TOPIC
               value: {{ .Values.api.env.scheduleTopic | quote }}
+            - name: KAFKA_PUBLISH_ENABLED
+              value: {{ .Values.api.env.kafkaPublishEnabled | quote }}
           readinessProbe:
             httpGet:
               path: /readyz

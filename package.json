@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:web": "node --test web/*.test.mjs"
+    "test:web": "node --test web/*.test.mjs deploy/helm/woms/*.test.mjs"
   },
   "engines": {
     "node": ">=22"

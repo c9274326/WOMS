@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,6 +29,25 @@ func TestIngressAuthRejectsMissingToken(t *testing.T) {
 
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", res.Code)
+	}
+}
+
+func TestAPIErrorMessagesAreZhTW(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Token invalid")
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "missing bearer prefix") {
+		t.Fatalf("expected pure zh-TW auth error, got %s", res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "請先登入後再操作") {
+		t.Fatalf("expected zh-TW auth error, got %s", res.Body.String())
 	}
 }
 
@@ -71,6 +92,199 @@ func TestSchedulerCannotCreateScheduleJobWithoutPreview(t *testing.T) {
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestScheduleJobRejectsStalePreviewRevision(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	previewID := createSchedulePreview(t, server, schedulerA, "A")
+
+	body := bytes.NewBufferString(`{"dueDate":"2026-05-08"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/orders/ORD-1", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("update order failed: %d %s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected stale preview rejection, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "排程資料已變更") {
+		t.Fatalf("expected zh-TW stale preview error, got %s", res.Body.String())
+	}
+}
+
+func TestScheduleJobPublishesQueuedJobAndCanExecuteLater(t *testing.T) {
+	store := NewMemoryStore()
+	publisher := &recordingPublisher{}
+	server := NewServerWithPublisher("secret", store, publisher)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	previewID := createSchedulePreview(t, server, schedulerA, "A")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("create schedule job failed: %d %s", res.Code, res.Body.String())
+	}
+	var job domain.ScheduleJob
+	if err := json.Unmarshal(res.Body.Bytes(), &job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if job.Status != domain.JobQueued {
+		t.Fatalf("expected queued async job, got %+v", job)
+	}
+	if len(publisher.jobs) != 1 || publisher.jobs[0].ID != job.ID {
+		t.Fatalf("expected published job, got %+v", publisher.jobs)
+	}
+	if len(store.allocations) != 0 {
+		t.Fatalf("queued async job should not persist allocations before worker executes, got %+v", store.allocations)
+	}
+
+	completed := store.ExecuteScheduleJob(job.ID)
+	if completed.Status != domain.JobCompleted {
+		t.Fatalf("expected completed job after execution, got %+v", completed)
+	}
+	if len(store.allocations) != 1 {
+		t.Fatalf("expected allocation after execution, got %+v", store.allocations)
+	}
+}
+
+func TestScheduleJobPublishFailureRollsBackQueuedJob(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServerWithPublisher("secret", store, failingPublisher{})
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	previewID := createSchedulePreview(t, server, schedulerA, "A")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("expected publish failure, got %d %s", res.Code, res.Body.String())
+	}
+	if len(store.jobs) != 0 {
+		t.Fatalf("publish failure should rollback queued job, got %+v", store.jobs)
+	}
+	if !strings.Contains(res.Body.String(), "排程任務送出失敗") {
+		t.Fatalf("expected zh-TW publish error, got %s", res.Body.String())
+	}
+}
+
+func TestHPAPeakDemoIsAdminOnlyAndCreatesWorkload(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	req := httptest.NewRequest(http.MethodPost, "/api/demo/hpa-peak", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected scheduler forbidden, got %d %s", res.Code, res.Body.String())
+	}
+
+	admin := login(t, server, "admin", "demo")
+	req = httptest.NewRequest(http.MethodPost, "/api/demo/hpa-peak", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected admin accepted, got %d %s", res.Code, res.Body.String())
+	}
+	var payload hpaPeakResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode hpa demo response: %v", err)
+	}
+	if payload.Summary.LineCount != 200 || payload.Summary.OrderCount != 1000 || payload.Summary.JobCount != 200 {
+		t.Fatalf("unexpected hpa demo summary: %+v", payload.Summary)
+	}
+	if payload.Summary.Statuses[string(domain.JobQueued)] != 200 {
+		t.Fatalf("expected queued jobs, got %+v", payload.Summary.Statuses)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/demo/hpa-peak", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected clear accepted, got %d %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode clear response: %v", err)
+	}
+	if payload.Summary.LineCount != 0 || payload.Summary.OrderCount != 0 || payload.Summary.JobCount != 200 || payload.Summary.Statuses[string(domain.JobCancelled)] != 200 {
+		t.Fatalf("expected cleared hpa demo summary, got %+v", payload.Summary)
+	}
+}
+
+func TestExecuteScheduleJobRespectsLineLockAndCancelledStatus(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServerWithPublisher("secret", store, &recordingPublisher{})
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	previewID := createSchedulePreview(t, server, schedulerA, "A")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("create schedule job failed: %d %s", res.Code, res.Body.String())
+	}
+	var job domain.ScheduleJob
+	if err := json.Unmarshal(res.Body.Bytes(), &job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+
+	store.mu.Lock()
+	store.lineLocks["A"] = true
+	store.mu.Unlock()
+	failed := store.ExecuteScheduleJob(job.ID)
+	if failed.Status != domain.JobFailed || !strings.Contains(failed.Message, "產線正在排程中") {
+		t.Fatalf("expected line lock failure, got %+v", failed)
+	}
+	store.mu.Lock()
+	delete(store.lineLocks, "A")
+	store.mu.Unlock()
+
+	createOrder(t, server, salesToken, "A")
+	previewID = createSchedulePreview(t, server, schedulerA, "A")
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","previewId":"` + previewID + `"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/schedules/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("create second schedule job failed: %d %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &job); err != nil {
+		t.Fatalf("decode second job: %v", err)
+	}
+	store.mu.Lock()
+	job.Status = domain.JobCancelled
+	store.jobs[job.ID] = job
+	store.mu.Unlock()
+	cancelled := store.ExecuteScheduleJob(job.ID)
+	if cancelled.Status != domain.JobCancelled {
+		t.Fatalf("expected cancelled job to stay cancelled, got %+v", cancelled)
 	}
 }
 
@@ -299,6 +513,44 @@ func TestSchedulerSeesOnlyAssignedLineOrders(t *testing.T) {
 	}
 	if len(payload.Orders) != 1 || payload.Orders[0].LineID != "A" {
 		t.Fatalf("expected only line A order, got %+v", payload.Orders)
+	}
+}
+
+func TestSalesSeesOnlyOwnOrders(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+	store.mu.Lock()
+	store.orders["ORD-2"] = domain.Order{
+		ID:        "ORD-2",
+		Customer:  "Other Sales",
+		LineID:    "A",
+		Quantity:  2500,
+		Priority:  domain.PriorityLow,
+		Status:    domain.StatusRejected,
+		DueDate:   mustAPIDate(t, "2026-05-03"),
+		CreatedBy: "user-other-sales",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	store.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Orders []domain.Order `json:"orders"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode orders response: %v", err)
+	}
+	if len(payload.Orders) != 1 || payload.Orders[0].ID != "ORD-1" {
+		t.Fatalf("expected sales to see only own order, got %+v", payload.Orders)
 	}
 }
 
@@ -976,7 +1228,7 @@ func TestProductionConfirmRejectsQuantityAboveOrderTotal(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected bad request, got %d %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), "producedQuantity cannot exceed scheduled allocation quantity") {
+	if !strings.Contains(res.Body.String(), "完成片數不能超過本日排程量") {
 		t.Fatalf("expected clear quantity error, got %s", res.Body.String())
 	}
 }
@@ -1273,4 +1525,27 @@ func contains(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+type recordingPublisher struct {
+	jobs []domain.ScheduleJob
+}
+
+func (p *recordingPublisher) PublishScheduleJob(_ context.Context, job domain.ScheduleJob) error {
+	p.jobs = append(p.jobs, job)
+	return nil
+}
+
+func (p *recordingPublisher) Close() error {
+	return nil
+}
+
+type failingPublisher struct{}
+
+func (failingPublisher) PublishScheduleJob(context.Context, domain.ScheduleJob) error {
+	return errors.New("kafka unavailable")
+}
+
+func (failingPublisher) Close() error {
+	return nil
 }

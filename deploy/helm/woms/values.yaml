@@ -10,11 +10,13 @@ api:
     tag: v0.1.20
   jwtSecret: change-me-in-production
   env:
+    store: postgres
     demoSeedData: "true"
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
     redisAddr: redis:6379
     kafkaBrokers: kafka:9092
     scheduleTopic: woms.schedule.jobs
+    kafkaPublishEnabled: "true"
   resources:
     requests:
       cpu: 100m
@@ -28,6 +30,10 @@ worker:
   image:
     repository: docker.io/YOUR_DOCKERHUB_NAMESPACE/woms-scheduler-worker
     tag: v0.1.20
+  env:
+    databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
+    minJobDurationMs: "0"
+    maxRetries: "3"
   resources:
     requests:
       cpu: 100m

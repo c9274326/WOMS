@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   defaultLine,
   conflictExplanation,
@@ -21,6 +22,32 @@ import {
   unacceptableDueDateMessage,
   waterlineMetrics,
 } from "./ui.js";
+
+test("preview copy uses state-specific titles instead of mixed conflict/allocation wording", () => {
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  assert.equal(html.includes("衝突與分配"), false);
+  assert.equal(app.includes("衝突與分配"), false);
+  assert.equal(app.includes("衝突處理"), true);
+  assert.equal(app.includes("訂單分配預覽"), true);
+});
+
+test("front-end visible HPA status labels are zh-TW", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  assert.equal(app.includes(">Jobs "), false);
+  assert.equal(app.includes(">queued "), false);
+  assert.equal(app.includes(">running "), false);
+  assert.equal(app.includes(">completed "), false);
+  assert.equal(app.includes(">failed "), false);
+  assert.equal(app.includes(">cancelled "), false);
+  assert.equal(app.includes("Kafka topic"), false);
+  assert.equal(app.includes("Consumer group"), false);
+  assert.equal(app.includes("Deployment 名稱"), false);
+  assert.equal(html.includes(">Orders<"), false);
+  assert.equal(html.includes(">Status<"), false);
+  assert.equal(html.includes(">Sales Follow-up<"), false);
+});
 
 const order = {
   id: "ORD-1",
